@@ -66,14 +66,26 @@ export async function relayRequest(request) {
   const headers = new Headers();
   const range = request.headers.get("range");
   if (range) headers.set("range", range);
-  const ua = request.headers.get("user-agent");
-  if (ua) headers.set("user-agent", ua);
+  const media = /\.(m3u8?|mp4|m4v|mkv|avi|ts|mov|webm)(\?|$)/i.test(parsed.pathname);
+  if (media) {
+    headers.set("user-agent", "VLC/3.0.21 LibVLC/3.0.21");
+    headers.set("referer", `${parsed.origin}/`);
+  } else {
+    const ua = request.headers.get("user-agent");
+    if (ua) headers.set("user-agent", ua);
+  }
   headers.set("accept", request.headers.get("accept") || "*/*");
   const upstream = await fetch(parsed, { method: request.method, headers, redirect: "follow" });
   const type = upstream.headers.get("content-type") || "";
   const playlist = /\.m3u8?(\?|$)/i.test(parsed.pathname) || /mpegurl|vnd\.apple/i.test(type);
   if (playlist && request.method !== "HEAD") {
     const text = await upstream.text();
+    if (!text.includes("#EXTM3U")) {
+      return new Response(text, {
+        status: upstream.status >= 400 ? upstream.status : 502,
+        headers: { "content-type": type || "text/plain", "access-control-allow-origin": "*" },
+      });
+    }
     const relayBase = `${url.origin}${url.pathname}?url=`;
     const body = rewritePlaylist(text, upstream.url || parsed.toString(), relayBase);
     return new Response(body, {
@@ -89,6 +101,9 @@ export async function relayRequest(request) {
   for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
     const value = upstream.headers.get(name);
     if (value) out.set(name, value);
+  }
+  if (/\.mp4(\?|$)/i.test(parsed.pathname) && !out.get("content-type")?.startsWith("video/")) {
+    out.set("content-type", "video/mp4");
   }
   out.set("cache-control", "no-store");
   out.set("access-control-allow-origin", "*");

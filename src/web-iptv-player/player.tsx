@@ -26,13 +26,20 @@ const WORKER = `export default {
     const headers = new Headers();
     const range = request.headers.get("range");
     if (range) headers.set("range", range);
-    const ua = request.headers.get("user-agent");
-    if (ua) headers.set("user-agent", ua);
+    const media = /\\.(m3u8?|mp4|m4v|mkv|avi|ts|mov|webm)(\\?|$)/i.test(parsed.pathname);
+    if (media) {
+      headers.set("user-agent", "VLC/3.0.21 LibVLC/3.0.21");
+      headers.set("referer", parsed.origin + "/");
+    } else {
+      const ua = request.headers.get("user-agent");
+      if (ua) headers.set("user-agent", ua);
+    }
     const upstream = await fetch(parsed, { headers, redirect: "follow" });
     const type = upstream.headers.get("content-type") || "";
     const relay = here.origin + here.pathname + "?url=";
     if (/\\.m3u8?(\\?|$)/i.test(parsed.pathname) || /mpegurl/i.test(type)) {
       const text = await upstream.text();
+      if (!text.includes("#EXTM3U")) return new Response(text, { status: upstream.status >= 400 ? upstream.status : 502, headers: cors });
       const abs = (u) => { try { return new URL(u, upstream.url).toString(); } catch { return u; } };
       const body = text.split(/\\r?\\n/).map((line) => {
         const t = line.trim();
@@ -71,10 +78,14 @@ export function Player(props: { request: PlayRequest }) {
     video.setAttribute("referrerpolicy", "no-referrer");
     let cancelled = false;
     const request = props.request;
-    let triedRelay = directBlocked(request.hlsUrl);
-    let usedFile = false;
-    let expecting = false;
     const native = prefersNativeHls(video);
+    const queue = playQueue(request);
+    let step = 0;
+    let viaRelay = false;
+    let expecting = false;
+    let switching = false;
+    let token = 0;
+    let timer = 0;
     setFailed(false);
     setEnded(false);
     setMenu("");
@@ -119,116 +130,150 @@ export function Player(props: { request: PlayRequest }) {
       }
     };
 
-    const playable = (url: string, forceRelay: boolean) => (forceRelay || directBlocked(url) ? proxied(url) : url);
+    const stopWatch = () => window.clearTimeout(timer);
+    const stuck = () => {
+      if (video.error) return true;
+      if (video.currentTime > 0.3) return false;
+      if (video.readyState >= 2) return false;
+      if (video.paused && video.readyState >= 1) return false;
+      return true;
+    };
+    const watch = () => {
+      stopWatch();
+      timer = window.setTimeout(() => {
+        if (cancelled || !expecting) return;
+        if (stuck()) advance();
+      }, 12000);
+    };
 
-    const start = async (forceRelay: boolean) => {
+    const begin = (url: string, raw: string, mine: number) => {
       expecting = false;
       hlsRef.current?.destroy();
       hlsRef.current = null;
-      video.removeAttribute("src");
-      video.load();
-      const source = playable(request.hlsUrl, forceRelay);
-      const file = request.fileUrl ? playable(request.fileUrl, forceRelay) : "";
-      const wantHls = !request.fileUrl || request.hlsUrl.endsWith(".m3u8");
-      const arm = (url: string) => {
+      const arm = () => {
+        if (mine !== token || cancelled) return;
         video.src = url;
         expecting = true;
-      };
-      if (wantHls && !native) {
-        const mod = await import("hls.js");
-        if (cancelled) return;
-        const Hls = mod.default;
-        if (Hls.isSupported()) {
-          const loader = forceRelay || directBlocked(request.hlsUrl) ? relayLoader(Hls.DefaultConfig.loader, proxied) : undefined;
-          const options: Record<string, unknown> = {
-            enableWorker: false,
-            capLevelToPlayerSize: true,
-            maxBufferLength: 20,
-            maxMaxBufferLength: 40,
-            backBufferLength: 20,
+        if (request.startAt && request.startAt > 0) {
+          const seekTo = () => {
+            if (mine !== token) return;
+            video.currentTime = request.startAt || 0;
           };
-          if (loader) options.loader = loader;
-          const hls = new Hls(options as never);
-          hlsRef.current = hls;
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            setAudio(readTracks(hls.audioTracks));
-            setSubs(readTracks(hls.subtitleTracks));
-            setAudioId(hls.audioTrack);
-            setSubId(hls.subtitleTrack);
-          });
-          hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => setAudio(readTracks(hls.audioTracks)));
-          hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => setSubs(readTracks(hls.subtitleTracks)));
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (!data?.fatal || cancelled) return;
-            if (!triedRelay) {
-              triedRelay = true;
-              void start(true);
-              return;
-            }
-            if (file && !usedFile) {
-              usedFile = true;
-              hls.destroy();
-              hlsRef.current = null;
-              arm(file);
-              void video.play().catch(() => undefined);
-              return;
-            }
-            setFailed(true);
-          });
-          hls.loadSource(source);
-          hls.attachMedia(video);
-          expecting = true;
-        } else {
-          arm(source);
+          video.addEventListener("loadedmetadata", seekTo, { once: true });
         }
-      } else if (wantHls) {
-        arm(source);
-      } else if (file) {
-        usedFile = true;
-        arm(file);
+        void video.play().catch(() => {
+          if (!cancelled && mine === token) setPlaying(false);
+        });
+        watch();
+      };
+      if (!isHls(raw) || native) {
+        arm();
+        return;
       }
-      if (request.startAt && request.startAt > 0) {
-        const seek = () => {
-          video.currentTime = request.startAt || 0;
-          video.removeEventListener("loadedmetadata", seek);
+      void import("hls.js").then((mod) => {
+        if (cancelled || mine !== token) return;
+        const Hls = mod.default;
+        if (!Hls.isSupported()) {
+          arm();
+          return;
+        }
+        const proxiedAlready = url !== raw;
+        const loader = proxiedAlready ? undefined : relayLoader(Hls.DefaultConfig.loader, proxied);
+        const options: Record<string, unknown> = {
+          enableWorker: false,
+          capLevelToPlayerSize: true,
+          maxBufferLength: 20,
+          maxMaxBufferLength: 40,
+          backBufferLength: 20,
         };
-        video.addEventListener("loadedmetadata", seek);
+        if (loader && (viaRelay || directBlocked(raw))) options.loader = loader;
+        const hls = new Hls(options as never);
+        hlsRef.current = hls;
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (mine !== token) return;
+          setAudio(readTracks(hls.audioTracks));
+          setSubs(readTracks(hls.subtitleTracks));
+          setAudioId(hls.audioTrack);
+          setSubId(hls.subtitleTrack);
+        });
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => setAudio(readTracks(hls.audioTracks)));
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => setSubs(readTracks(hls.subtitleTracks)));
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!data?.fatal || cancelled || mine !== token) return;
+          advance();
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        expecting = true;
+        void video.play().catch(() => {
+          if (!cancelled && mine === token) setPlaying(false);
+        });
+        watch();
+      });
+    };
+
+    const spin = async (mine: number) => {
+      while (!cancelled && mine === token && step < queue.length) {
+        const raw = queue[step];
+        const wantRelay = viaRelay || directBlocked(raw);
+        if (!wantRelay) {
+          begin(raw, raw, mine);
+          return;
+        }
+        const via = await relayServes(raw);
+        if (cancelled || mine !== token) return;
+        if (via) {
+          begin(via, raw, mine);
+          return;
+        }
+        if (!viaRelay && !directBlocked(raw)) {
+          viaRelay = true;
+          continue;
+        }
+        viaRelay = false;
+        step += 1;
       }
-      try {
-        await video.play();
-      } catch {
-        if (!cancelled) setPlaying(false);
+      if (!cancelled && mine === token) setFailed(true);
+    };
+
+    const advance = () => {
+      if (cancelled || switching) return;
+      switching = true;
+      stopWatch();
+      expecting = false;
+      token += 1;
+      const mine = token;
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+      const raw = queue[step];
+      if (raw && !viaRelay && !directBlocked(raw)) viaRelay = true;
+      else {
+        viaRelay = false;
+        step += 1;
       }
+      switching = false;
+      void spin(mine);
     };
 
     const onMediaError = () => {
-      if (!expecting || cancelled || hlsRef.current) return;
-      expecting = false;
-      if (!triedRelay) {
-        triedRelay = true;
-        void start(true);
-        return;
-      }
-      if (request.fileUrl && !usedFile) {
-        usedFile = true;
-        video.src = playable(request.fileUrl, true);
-        expecting = true;
-        void video.play().catch(() => undefined);
-        return;
-      }
-      setFailed(true);
+      if (!expecting || cancelled) return;
+      advance();
     };
 
     if (request.kind === "live" && app.account) {
       saveLastLive(app.account.id, { id: request.id, name: request.title, poster: request.poster || "", updatedAt: Date.now() });
     }
-    void start(triedRelay);
+    void spin(token);
     const onTime = () => {
+      if (video.currentTime > 0.3) stopWatch();
       setPosition(video.currentTime || 0);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       if (video.currentTime > 0 && Math.floor(video.currentTime) % 5 === 0) remember();
     };
-    const onPlay = () => setPlaying(true);
+    const onPlay = () => {
+      setPlaying(true);
+      watch();
+    };
     const onPause = () => {
       setPlaying(false);
       remember();
@@ -246,6 +291,7 @@ export function Player(props: { request: PlayRequest }) {
     video.textTracks.addEventListener("addtrack", collectNative);
     return () => {
       cancelled = true;
+      stopWatch();
       remember();
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("timeupdate", onTime);
@@ -387,6 +433,49 @@ export function Player(props: { request: PlayRequest }) {
       </div>
     </div>
   );
+}
+
+function playQueue(request: PlayRequest): string[] {
+  const list: string[] = [];
+  const file = request.fileUrl || "";
+  const path = file.split("?")[0]?.toLowerCase() || "";
+  const friendly = /\.(mp4|m4v|mov|webm)$/.test(path);
+  if (request.kind !== "live" && file && friendly) list.push(file);
+  if (request.hlsUrl) list.push(request.hlsUrl);
+  if (request.kind !== "live" && file && !friendly) list.push(file);
+  if (request.kind === "live" && request.hlsUrl) {
+    const ts = request.hlsUrl.replace(/\.m3u8(?=$|\?)/i, ".ts");
+    if (ts !== request.hlsUrl) list.push(ts);
+  }
+  return [...new Set(list)];
+}
+
+function isHls(url: string): boolean {
+  return /\.m3u8?(?:$|\?|#)/i.test(url);
+}
+
+async function relayServes(raw: string): Promise<string | null> {
+  const url = proxied(raw);
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const response = await fetch(url, { signal: ctrl.signal, headers: { Range: "bytes=0-512" } });
+    if (response.status === 404 || response.status >= 500) return null;
+    const type = (response.headers.get("content-type") || "").toLowerCase();
+    if (type.includes("text/html")) return null;
+    const reader = response.body?.getReader();
+    if (reader) {
+      const { value } = await reader.read();
+      await reader.cancel().catch(() => undefined);
+      const head = new TextDecoder().decode(value || new Uint8Array()).replace(/^\uFEFF/, "").trim();
+      if (head.startsWith("<")) return null;
+    }
+    return url;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function prefersNativeHls(video: HTMLVideoElement): boolean {
