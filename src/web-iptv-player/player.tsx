@@ -69,7 +69,13 @@ export function Player(props: { request: PlayRequest }) {
   const [subId, setSubId] = useState(-1);
   const [menu, setMenu] = useState<"" | "audio" | "sub">("");
   const [failed, setFailed] = useState(false);
+  const [failKind, setFailKind] = useState<"device" | "format">("device");
   const [ended, setEnded] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [chrome, setChrome] = useState(true);
+  const chromeShown = useRef(true);
+  const chromeTimer = useRef(0);
+  const holdChrome = useRef(false);
   const hlsRef = useRef<{ destroy: () => void; audioTrack: number; subtitleTrack: number } | null>(null);
 
   useEffect(() => {
@@ -79,16 +85,19 @@ export function Player(props: { request: PlayRequest }) {
     let cancelled = false;
     const request = props.request;
     const native = prefersNativeHls(video);
-    const queue = playQueue(request);
+    const attempts = attemptsFor(request, native);
     let step = 0;
-    let viaRelay = false;
     let expecting = false;
     let switching = false;
     let token = 0;
     let timer = 0;
+    let sawFormat = false;
+    video.preload = "auto";
     setFailed(false);
+    setFailKind("device");
     setEnded(false);
     setMenu("");
+    setBusy(true);
 
     const remember = () => {
       if (request.kind === "live" || !app.account) return;
@@ -134,8 +143,7 @@ export function Player(props: { request: PlayRequest }) {
     const stuck = () => {
       if (video.error) return true;
       if (video.currentTime > 0.3) return false;
-      if (video.readyState >= 2) return false;
-      if (video.paused && video.readyState >= 1) return false;
+      if (video.paused && video.readyState >= 2) return false;
       return true;
     };
     const watch = () => {
@@ -179,14 +187,16 @@ export function Player(props: { request: PlayRequest }) {
         }
         const proxiedAlready = url !== raw;
         const loader = proxiedAlready ? undefined : relayLoader(Hls.DefaultConfig.loader, proxied);
+        const vod = request.kind !== "live";
         const options: Record<string, unknown> = {
           enableWorker: false,
           capLevelToPlayerSize: true,
-          maxBufferLength: 20,
-          maxMaxBufferLength: 40,
-          backBufferLength: 20,
+          startFragPrefetch: true,
+          maxBufferLength: vod ? 30 : 10,
+          maxMaxBufferLength: vod ? 60 : 20,
+          backBufferLength: vod ? 30 : 10,
         };
-        if (loader && (viaRelay || directBlocked(raw))) options.loader = loader;
+        if (loader && attemptUsesRelay(url, raw)) options.loader = loader;
         const hls = new Hls(options as never);
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -212,28 +222,33 @@ export function Player(props: { request: PlayRequest }) {
       });
     };
 
+    const giveUp = () => setFailKind(sawFormat ? "format" : "device");
+
     const spin = async (mine: number) => {
-      while (!cancelled && mine === token && step < queue.length) {
-        const raw = queue[step];
-        const wantRelay = viaRelay || directBlocked(raw);
-        if (!wantRelay) {
-          begin(raw, raw, mine);
+      while (!cancelled && mine === token && step < attempts.length) {
+        const attempt = attempts[step];
+        if (!attempt.relay) {
+          begin(attempt.raw, attempt.raw, mine);
           return;
         }
-        const via = await relayServes(raw);
+        const via = await relayServes(attempt.raw, native && request.kind !== "live");
         if (cancelled || mine !== token) return;
-        if (via) {
-          begin(via, raw, mine);
-          return;
-        }
-        if (!viaRelay && !directBlocked(raw)) {
-          viaRelay = true;
+        if (via === "format") {
+          sawFormat = true;
+          const raw = attempt.raw;
+          while (step < attempts.length && attempts[step].raw === raw) step += 1;
           continue;
         }
-        viaRelay = false;
+        if (via) {
+          begin(via, attempt.raw, mine);
+          return;
+        }
         step += 1;
       }
-      if (!cancelled && mine === token) setFailed(true);
+      if (!cancelled && mine === token) {
+        giveUp();
+        setFailed(true);
+      }
     };
 
     const advance = () => {
@@ -245,12 +260,7 @@ export function Player(props: { request: PlayRequest }) {
       const mine = token;
       hlsRef.current?.destroy();
       hlsRef.current = null;
-      const raw = queue[step];
-      if (raw && !viaRelay && !directBlocked(raw)) viaRelay = true;
-      else {
-        viaRelay = false;
-        step += 1;
-      }
+      step += 1;
       switching = false;
       void spin(mine);
     };
@@ -276,18 +286,29 @@ export function Player(props: { request: PlayRequest }) {
     };
     const onPause = () => {
       setPlaying(false);
+      if (!video.seeking) setBusy(false);
       remember();
     };
     const onEnd = () => {
       setEnded(true);
       setPlaying(false);
+      setBusy(false);
       remember();
+    };
+    const onWait = () => setBusy(true);
+    const onReady = () => {
+      if (!video.seeking && video.readyState >= 3) setBusy(false);
     };
     video.addEventListener("error", onMediaError);
     video.addEventListener("timeupdate", onTime);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("ended", onEnd);
+    video.addEventListener("waiting", onWait);
+    video.addEventListener("seeking", onWait);
+    video.addEventListener("loadstart", onWait);
+    video.addEventListener("playing", onReady);
+    video.addEventListener("canplay", onReady);
     video.textTracks.addEventListener("addtrack", collectNative);
     return () => {
       cancelled = true;
@@ -298,6 +319,11 @@ export function Player(props: { request: PlayRequest }) {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("ended", onEnd);
+      video.removeEventListener("waiting", onWait);
+      video.removeEventListener("seeking", onWait);
+      video.removeEventListener("loadstart", onWait);
+      video.removeEventListener("playing", onReady);
+      video.removeEventListener("canplay", onReady);
       video.textTracks.removeEventListener("addtrack", collectNative);
       hlsRef.current?.destroy();
       hlsRef.current = null;
@@ -318,6 +344,39 @@ export function Player(props: { request: PlayRequest }) {
     if (!video) return;
     if (video.paused) void video.play();
     else video.pause();
+  };
+
+  holdChrome.current = menu !== "" || failed || ended;
+  const nudge = () => {
+    window.clearTimeout(chromeTimer.current);
+    if (!chromeShown.current) {
+      chromeShown.current = true;
+      setChrome(true);
+    }
+    if (holdChrome.current) return;
+    chromeTimer.current = window.setTimeout(() => {
+      chromeShown.current = false;
+      setChrome(false);
+    }, 3000);
+  };
+
+  useEffect(() => {
+    const onKey = () => nudge();
+    window.addEventListener("keydown", onKey);
+    nudge();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(chromeTimer.current);
+    };
+  }, [menu, failed, ended]);
+
+  const onSurface = () => {
+    if (!chrome) {
+      nudge();
+      return;
+    }
+    toggle();
+    nudge();
   };
 
   const chooseAudio = (id: number) => {
@@ -349,60 +408,89 @@ export function Player(props: { request: PlayRequest }) {
   const finite = Number.isFinite(duration) && duration > 0 && props.request.kind !== "live";
   const code = props.request.season && props.request.episode ? episodeCode(props.request.season, props.request.episode) : "";
 
+  const control = "flex h-10 w-10 shrink-0 items-center justify-center rounded-md [&_svg]:h-5 [&_svg]:w-5";
+
   return (
-    <div data-player data-screen class="fixed inset-0 z-30 flex flex-col bg-bg">
-      <video ref={videoRef} class="min-h-0 w-full flex-1 bg-bg [&::cue]:bg-transparent [&::cue]:text-[1.15rem] [&::cue]:text-fg" playsInline onClick={toggle} />
-      <div class="flex flex-col gap-3 border-t border-line bg-surface p-4">
-        <div class="flex flex-wrap items-center gap-3">
-          <button type="button" data-nav class="flex min-h-12 min-w-12 items-center justify-center rounded-md border border-line" aria-label={app.t("back")} onClick={() => history.back()}>
+    <div
+      data-player
+      data-screen
+      class="fixed inset-0 z-30 box-border flex bg-black pt-[env(safe-area-inset-top,0px)] pr-[env(safe-area-inset-right,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)]"
+      onPointerDown={nudge}
+      onPointerMove={nudge}
+    >
+      <div class="relative min-h-0 w-full flex-1">
+      <video ref={videoRef} class="h-full w-full bg-black object-contain [&::cue]:bg-transparent [&::cue]:text-[1.15rem] [&::cue]:text-white" playsInline preload="auto" onClick={onSurface} />
+      {busy && !failed && !ended ? (
+        <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span class="h-11 w-11 animate-spin rounded-full border-2 border-white/25 border-t-white" />
+        </div>
+      ) : null}
+      {failed ? <p class="pointer-events-none absolute inset-x-6 top-1/3 text-center text-white">{failKind === "format" ? app.t("formatError") : app.t("playerError")}</p> : null}
+      {ended && props.request.nextPath ? (
+        <button type="button" data-nav class="absolute left-1/2 top-1/3 min-h-10 -translate-x-1/2 rounded-md bg-accent px-4 text-sm font-semibold text-on-accent" onClick={() => go(props.request.nextPath || "/")}>
+          {app.t("nextEpisode")}
+        </button>
+      ) : null}
+      {ended && !props.request.nextPath && props.request.kind !== "live" ? <p class="pointer-events-none absolute inset-x-6 top-1/3 text-center text-white/80">{app.t("ended")}</p> : null}
+      <div class={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-3 pt-14 transition-opacity duration-300 ${chrome ? "opacity-100" : "pointer-events-none opacity-0"}`}>
+        <div class="mb-2 flex min-w-0 items-center gap-2 text-white">
+          <button type="button" data-nav class={`${control} border border-white/25 bg-black/40`} aria-label={app.t("back")} onClick={() => history.back()}>
             <IconBack />
           </button>
           <div class="min-w-0 flex-1">
-            <div class="truncate font-semibold">{props.request.subtitle || props.request.title}</div>
-            <div class="truncate text-sm text-muted">
+            <div class="truncate text-sm font-semibold">{props.request.subtitle || props.request.title}</div>
+            <div class="truncate text-xs text-white/70">
               {props.request.kind === "live" ? app.t("liveBadge") : [code, props.request.subtitle ? props.request.title : ""].filter(Boolean).join(" · ")}
             </div>
           </div>
-          <div class="tabular-nums text-sm text-muted">{finite ? `${formatClock(position)} / ${formatClock(duration)}` : formatClock(position)}</div>
         </div>
         {finite ? (
-          <input
-            data-nav
-            type="range"
-            min={0}
-            max={Math.floor(duration)}
-            step={10}
-            value={Math.min(Math.floor(duration), Math.floor(position))}
-            aria-label={app.t("play")}
-            class="h-11 w-full accent-accent"
-            onInput={(event) => {
-              const video = videoRef.current;
-              if (!video) return;
-              video.currentTime = Number((event.currentTarget as HTMLInputElement).value);
-            }}
-          />
+          <div class="mb-2 flex items-center gap-2 text-xs tabular-nums text-white/80">
+            <span class="w-12 shrink-0 text-right">{formatClock(position)}</span>
+            <input
+              data-nav
+              type="range"
+              min={0}
+              max={Math.max(1, duration)}
+              step={1}
+              value={Math.min(duration, position)}
+              aria-label={app.t("play")}
+              class="h-10 min-w-0 flex-1 accent-accent"
+              onInput={(event) => {
+                const video = videoRef.current;
+                if (!video) return;
+                video.currentTime = Number((event.currentTarget as HTMLInputElement).value);
+              }}
+            />
+            <span class="w-12 shrink-0">{formatClock(duration)}</span>
+          </div>
         ) : null}
-        <div class="flex flex-wrap gap-2">
-          <button type="button" data-nav data-autofocus class="flex min-h-14 min-w-14 items-center justify-center rounded-md border border-line" aria-label={app.t("back10")} onClick={() => seek(-10)}>
-            <IconBack10 />
-          </button>
-          <button type="button" data-nav class="flex min-h-14 min-w-14 items-center justify-center rounded-md bg-accent text-on-accent" aria-label={playing ? app.t("pause") : app.t("play")} onClick={toggle}>
-            {playing ? <IconPause large /> : <IconPlay large />}
-          </button>
-          <button type="button" data-nav class="flex min-h-14 min-w-14 items-center justify-center rounded-md border border-line" aria-label={app.t("fwd10")} onClick={() => seek(10)}>
-            <IconFwd10 />
-          </button>
-          <button type="button" data-nav class={`flex min-h-14 min-w-14 items-center justify-center rounded-md ${menu === "audio" ? "bg-accent text-on-accent" : "border border-line"}`} aria-label={app.t("audio")} aria-pressed={menu === "audio"} onClick={() => setMenu(menu === "audio" ? "" : "audio")}>
-            <IconAudio large />
-          </button>
-          <button type="button" data-nav class={`flex min-h-14 min-w-14 items-center justify-center rounded-md ${menu === "sub" ? "bg-accent text-on-accent" : "border border-line"}`} aria-label={app.t("subtitles")} aria-pressed={menu === "sub"} onClick={() => setMenu(menu === "sub" ? "" : "sub")}>
-            <IconSubs large />
-          </button>
+        <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+          <span />
+          <div class="flex flex-nowrap items-center justify-center gap-1.5">
+            <button type="button" data-nav data-autofocus class={`${control} border border-white/25 bg-black/40 text-white`} aria-label={app.t("back10")} onClick={() => seek(-10)}>
+              <IconBack10 />
+            </button>
+            <button type="button" data-nav class={`${control} bg-accent text-on-accent`} aria-label={playing ? app.t("pause") : app.t("play")} onClick={toggle}>
+              {playing ? <IconPause /> : <IconPlay />}
+            </button>
+            <button type="button" data-nav class={`${control} border border-white/25 bg-black/40 text-white`} aria-label={app.t("fwd10")} onClick={() => seek(10)}>
+              <IconFwd10 />
+            </button>
+          </div>
+          <div class="flex flex-nowrap items-center justify-end gap-1.5">
+            <button type="button" data-nav class={`${control} ${menu === "audio" ? "bg-accent text-on-accent" : "border border-white/25 bg-black/40 text-white"}`} aria-label={app.t("audio")} aria-pressed={menu === "audio"} onClick={() => setMenu(menu === "audio" ? "" : "audio")}>
+              <IconAudio />
+            </button>
+            <button type="button" data-nav class={`${control} ${menu === "sub" ? "bg-accent text-on-accent" : "border border-white/25 bg-black/40 text-white"}`} aria-label={app.t("subtitles")} aria-pressed={menu === "sub"} onClick={() => setMenu(menu === "sub" ? "" : "sub")}>
+              <IconSubs />
+            </button>
+          </div>
         </div>
         {menu ? (
-          <div class="flex flex-wrap gap-2">
+          <div class="mt-2 flex flex-nowrap justify-end gap-1.5 overflow-x-auto">
             {menu === "sub" ? (
-              <button type="button" data-nav class={`min-h-12 rounded-md px-4 ${subId === -1 ? "bg-accent text-on-accent" : "border border-line"}`} onClick={() => chooseSub(-1)}>
+              <button type="button" data-nav class={`h-9 shrink-0 rounded-md px-3 text-sm ${subId === -1 ? "bg-accent text-on-accent" : "border border-white/25 bg-black/40 text-white"}`} onClick={() => chooseSub(-1)}>
                 {app.t("off")}
               </button>
             ) : null}
@@ -413,63 +501,96 @@ export function Player(props: { request: PlayRequest }) {
                   type="button"
                   data-nav
                   key={track.id}
-                  class={`min-h-12 rounded-md px-4 ${active ? "bg-accent text-on-accent" : "border border-line"}`}
+                  class={`h-9 shrink-0 rounded-md px-3 text-sm ${active ? "bg-accent text-on-accent" : "border border-white/25 bg-black/40 text-white"}`}
                   onClick={() => (menu === "audio" ? chooseAudio(track.id) : chooseSub(track.id))}
                 >
                   {labelTrack(track.label, app.lang, track.id)}
                 </button>
               );
             })}
-            {(menu === "audio" ? audio : subs).length === 0 ? <p class="text-sm text-muted">{app.t("noTracks")}</p> : null}
+            {(menu === "audio" ? audio : subs).length === 0 ? <p class="shrink-0 text-sm text-white/70">{app.t("noTracks")}</p> : null}
           </div>
         ) : null}
-        {failed ? <p class="text-accent">{app.t("playerError")}</p> : null}
-        {ended && props.request.nextPath ? (
-          <button type="button" data-nav class="min-h-12 self-start rounded-md bg-accent px-4 font-semibold text-on-accent" onClick={() => go(props.request.nextPath || "/")}>
-            {app.t("nextEpisode")}
-          </button>
-        ) : null}
-        {ended && !props.request.nextPath && props.request.kind !== "live" ? <p class="text-muted">{app.t("ended")}</p> : null}
+      </div>
       </div>
     </div>
   );
 }
 
-function playQueue(request: PlayRequest): string[] {
-  const list: string[] = [];
+function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; relay: boolean }> {
+  const urls: string[] = [];
   const file = request.fileUrl || "";
   const path = file.split("?")[0]?.toLowerCase() || "";
-  const friendly = /\.(mp4|m4v|mov|webm)$/.test(path);
-  if (request.kind !== "live" && file && friendly) list.push(file);
-  if (request.hlsUrl) list.push(request.hlsUrl);
-  if (request.kind !== "live" && file && !friendly) list.push(file);
-  if (request.kind === "live" && request.hlsUrl) {
+  const badFile = /\.(mkv|avi|wmv|flv|mpg|mpeg|divx)$/.test(path);
+  if (request.kind !== "live") {
+    if (request.hlsUrl) urls.push(request.hlsUrl);
+    if (file && file !== request.hlsUrl && !(ios && badFile)) urls.push(file);
+  } else if (request.hlsUrl) {
+    urls.push(request.hlsUrl);
     const ts = request.hlsUrl.replace(/\.m3u8(?=$|\?)/i, ".ts");
-    if (ts !== request.hlsUrl) list.push(ts);
+    if (ts !== request.hlsUrl) urls.push(ts);
   }
-  return [...new Set(list)];
+  const attempts: Array<{ raw: string; relay: boolean }> = [];
+  for (const raw of urls) {
+    const relays = ios && request.kind !== "live" ? [true, false] : [false, true];
+    for (const relay of relays) {
+      if (!relay && directBlocked(raw)) continue;
+      attempts.push({ raw, relay });
+    }
+  }
+  return attempts;
+}
+
+function attemptUsesRelay(url: string, raw: string): boolean {
+  return url !== raw;
+}
+
+function playlistLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("#")) {
+      const match = /URI="([^"]+)"/i.exec(trimmed);
+      if (match) lines.push(match[1]);
+      continue;
+    }
+    lines.push(trimmed);
+  }
+  return lines;
+}
+
+function iosPlaylistOk(text: string): boolean {
+  if (!text.includes("#EXTM3U")) return false;
+  const lines = playlistLines(text);
+  if (lines.length === 0) return true;
+  const bad = /\.(mkv|avi|wmv|flv|mpg|mpeg|divx)(?:$|\?)/i;
+  const good = /\.(m3u8?|ts|mp4|m4s|m4v|mov|aac|webm)(?:$|\?)/i;
+  if (lines.some((line) => good.test(line))) return true;
+  if (lines.every((line) => bad.test(line))) return false;
+  return true;
 }
 
 function isHls(url: string): boolean {
   return /\.m3u8?(?:$|\?|#)/i.test(url);
 }
 
-async function relayServes(raw: string): Promise<string | null> {
+async function relayServes(raw: string, rejectBad: boolean): Promise<string | "format" | null> {
   const url = proxied(raw);
   const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), 8000);
   try {
-    const response = await fetch(url, { signal: ctrl.signal, headers: { Range: "bytes=0-512" } });
+    const response = await fetch(url, { signal: ctrl.signal, headers: { Range: "bytes=0-4095" } });
     if (response.status === 404 || response.status >= 500) return null;
     const type = (response.headers.get("content-type") || "").toLowerCase();
     if (type.includes("text/html")) return null;
     const reader = response.body?.getReader();
-    if (reader) {
-      const { value } = await reader.read();
-      await reader.cancel().catch(() => undefined);
-      const head = new TextDecoder().decode(value || new Uint8Array()).replace(/^\uFEFF/, "").trim();
-      if (head.startsWith("<")) return null;
-    }
+    if (!reader) return url;
+    const { value } = await reader.read();
+    await reader.cancel().catch(() => undefined);
+    const head = new TextDecoder().decode(value || new Uint8Array()).replace(/^\uFEFF/, "").trim();
+    if (head.startsWith("<")) return null;
+    if (rejectBad && head.includes("#EXTM3U") && !iosPlaylistOk(head)) return "format";
     return url;
   } catch {
     return null;
