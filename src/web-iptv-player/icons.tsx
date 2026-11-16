@@ -70,20 +70,22 @@ export function IconPause(props: { large?: boolean }) {
 
 export function IconBack10() {
   return (
-    <svg viewBox="0 0 24 24" class="h-7 w-7" aria-hidden="true">
-      <path d="M11 6.5a5.5 5.5 0 1 0 1.4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-      <path d="M12.6 4.2 10.4 6.8l3.2 1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-      <text x="12" y="16" text-anchor="middle" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text>
+    <svg viewBox="0 0 24 24" class="h-8 w-8" aria-hidden="true">
+      <path d="M16.6 6.1A7.5 7.5 0 1 0 18.8 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+      <path d="M16.5 3.2v4.1h-4.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M9.15 10.5v4.7" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" />
+      <ellipse cx="13.55" cy="12.85" rx="1.85" ry="2.4" fill="none" stroke="currentColor" stroke-width="1.55" />
     </svg>
   );
 }
 
 export function IconFwd10() {
   return (
-    <svg viewBox="0 0 24 24" class="h-7 w-7" aria-hidden="true">
-      <path d="M13 6.5a5.5 5.5 0 1 1-1.4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-      <path d="M11.4 4.2 13.6 6.8l-3.2 1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-      <text x="12" y="16" text-anchor="middle" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text>
+    <svg viewBox="0 0 24 24" class="h-8 w-8" aria-hidden="true">
+      <path d="M7.4 6.1A7.5 7.5 0 1 1 5.2 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+      <path d="M7.5 3.2v4.1h4.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M9.15 10.5v4.7" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" />
+      <ellipse cx="13.55" cy="12.85" rx="1.85" ry="2.4" fill="none" stroke="currentColor" stroke-width="1.55" />
     </svg>
   );
 }
