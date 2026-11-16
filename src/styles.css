@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-line: var(--line);
+  --font-sans: "Segoe UI", "Helvetica Neue", "Liberation Sans", sans-serif;
+  --radius-md: 0.75rem;
+}
+
+:root[data-theme="dark"] {
+  --bg: #101418;
+  --surface: #1b222a;
+  --fg: #f3efe6;
+  --muted: #93a0aa;
+  --accent: #e09a3e;
+  --on-accent: #1a1206;
+  --line: color-mix(in srgb, var(--fg) 14%, transparent);
+  --surface-2: color-mix(in srgb, var(--fg) 7%, var(--surface));
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f3efe6;
+  --surface: #fffdf8;
+  --fg: #1c1915;
+  --muted: #6e665c;
+  --accent: #9a5b12;
+  --on-accent: #fffdf8;
+  --line: color-mix(in srgb, var(--fg) 14%, transparent);
+  --surface-2: color-mix(in srgb, var(--fg) 5%, var(--surface));
+  color-scheme: light;
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 1.125rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  [data-nav]:focus {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+}
+
+.poster-frame {
+  aspect-ratio: 2 / 3;
+  position: relative;
+}
+
+.title-logo {
+  display: block;
+  max-height: 5.5rem;
+  max-width: min(100%, 28rem);
+  object-fit: contain;
+  object-position: left center;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 2.75rem;
+  accent-color: var(--accent);
+}
+
+video::cue {
+  background: transparent;
+  color: var(--fg);
+  font-size: 1.15rem;
+}

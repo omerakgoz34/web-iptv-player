@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="tr" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#101418" />
+    <title>PERDE</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <script>
+      try {
+        var prefs = JSON.parse(localStorage.getItem("perde.prefs") || "{}");
+        var theme = prefs.theme === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        var lang = prefs.lang === "en" || prefs.lang === "tr" ? prefs.lang : (navigator.language || "").toLowerCase().indexOf("tr") === 0 ? "tr" : "en";
+        document.documentElement.lang = lang;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", theme === "light" ? "#f3efe6" : "#101418");
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>
