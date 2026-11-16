@@ -70,9 +70,6 @@ export function Shell(props: { children: ComponentChildren; active?: "home" | Ki
         <button type="button" data-nav class="mr-auto flex min-h-12 items-center pr-2 text-left" onClick={() => go("/")}>
           <Wordmark />
         </button>
-        <NavButton label={app.t("live")} path="/live" active={props.active === "live"} />
-        <NavButton label={app.t("movies")} path="/movies" active={props.active === "movie"} />
-        <NavButton label={app.t("series")} path="/series" active={props.active === "series"} />
         <LangTheme />
         {props.active === "home" ? (
           <button type="button" data-nav class="flex min-h-12 items-center gap-2 rounded-md bg-accent px-4 font-semibold text-on-accent" onClick={() => app.refresh()} disabled={app.boot === "loading"}>
@@ -111,19 +108,6 @@ export function LangTheme() {
         {app.prefs.theme === "dark" ? <IconSun /> : <IconMoon />}
       </button>
     </>
-  );
-}
-
-function NavButton(props: { label: string; path: string; active: boolean }) {
-  return (
-    <button
-      type="button"
-      data-nav
-      class={`min-h-12 rounded-md px-4 ${props.active ? "bg-accent font-semibold text-on-accent" : "border border-line bg-surface text-fg"}`}
-      onClick={() => go(props.path)}
-    >
-      {props.label}
-    </button>
   );
 }
 
