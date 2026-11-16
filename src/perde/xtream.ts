@@ -63,6 +63,43 @@ export function parseLogin(input: { server: string; username: string; password: 
   return { id: `${username}@${url.host}${path === "/" ? "" : path}`, base, username, password };
 }
 
+export async function preferHttps(account: Account): Promise<Account> {
+  if (typeof location === "undefined" || location.protocol !== "https:") return account;
+  if (!account.base.startsWith("http://")) return account;
+  if (loadPrefs().relay.trim()) return account;
+  const bases = httpsVariants(account.base);
+  const hits = await Promise.all(bases.map(async (base) => ((await probe(base, account)) ? base : "")));
+  const base = hits.find(Boolean);
+  return base ? { ...account, base } : account;
+}
+
+async function probe(base: string, account: Account): Promise<boolean> {
+  const url = new URL(`${base}/player_api.php`);
+  url.searchParams.set("username", account.username);
+  url.searchParams.set("password", account.password);
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return false;
+    const data = (await response.json()) as { user_info?: { auth?: unknown } };
+    return Number(data.user_info?.auth) === 1;
+  } catch {
+    return false;
+  }
+}
+
+function httpsVariants(base: string): string[] {
+  const url = new URL(base.endsWith("/") ? base : `${base}/`);
+  url.protocol = "https:";
+  const samePort = url.toString().replace(/\/$/, "");
+  const variants = [samePort];
+  if (url.port && url.port !== "443") {
+    url.port = "";
+    const standard = url.toString().replace(/\/$/, "");
+    if (standard !== samePort) variants.push(standard);
+  }
+  return variants;
+}
+
 export async function fetchCatalog(account: Account): Promise<Catalog> {
   const auth = await getJson<Record<string, unknown>>(account, {});
   assertAuth(auth);
@@ -233,17 +270,15 @@ async function fetchUpstream(url: string): Promise<Response> {
     if (prefs.relay.trim()) attempts.push("user");
     attempts.push("local");
   }
-  let sawBlock = pageBlocksDirect;
+  let blocked = pageBlocksDirect;
+  let timedOut = false;
   for (const kind of attempts) {
     const target = kind === "direct" ? url : kind === "user" ? applyRelay(prefs.relay.trim(), url) : localRelay(url);
     try {
       const response = await fetch(target, { signal: AbortSignal.timeout(25000) });
       if (kind !== "direct") {
         const type = response.headers.get("content-type") || "";
-        if (response.status === 404 || type.includes("text/html")) {
-          sawBlock = true;
-          continue;
-        }
+        if (response.status === 404 || type.includes("text/html")) continue;
         relayWrap = kind === "user" ? (value) => applyRelay(prefs.relay.trim(), value) : localRelay;
         transport = "relay";
       } else {
@@ -251,11 +286,13 @@ async function fetchUpstream(url: string): Promise<Response> {
         transport = "direct";
       }
       return response;
-    } catch {
-      sawBlock = true;
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : "";
+      if (name === "TimeoutError" || name === "AbortError") timedOut = true;
+      else if (kind === "direct" || pageBlocksDirect) blocked = true;
     }
   }
-  throw new IptvError(sawBlock ? "blocked" : "network");
+  throw new IptvError(!timedOut && blocked ? "blocked" : "network");
 }
 
 function localRelay(url: string): string {

@@ -17,7 +17,7 @@ import {
   savePrefs,
 } from "./storage";
 import type { Account, Catalog, Fail, Prefs } from "./types";
-import { fetchCatalog, IptvError, parseLogin, resetTransport, resolvePlay } from "./xtream";
+import { fetchCatalog, IptvError, parseLogin, preferHttps, resetTransport, resolvePlay } from "./xtream";
 import type { PlayRequest } from "./types";
 
 export function App() {
@@ -105,7 +105,11 @@ export function App() {
       lang: prefs.lang,
       t: (key) => translate(prefs.lang, key),
       prefs,
-      updatePrefs: (patch) => setPrefs((current) => ({ ...current, ...patch })),
+      updatePrefs: (patch) => {
+        const next = { ...prefs, ...patch };
+        savePrefs(next);
+        setPrefs(next);
+      },
       account,
       catalog,
       boot,
@@ -128,7 +132,8 @@ export function App() {
       },
       connect: async (server, username, password) => {
         try {
-          const nextAccount = parseLogin({ server, username, password });
+          const parsed = parseLogin({ server, username, password });
+          const nextAccount = await preferHttps(parsed);
           resetTransport();
           const next = await fetchCatalog(nextAccount);
           saveAccount(nextAccount);

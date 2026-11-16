@@ -254,7 +254,7 @@ export function Player(props: { request: PlayRequest }) {
 
   return (
     <div data-player data-screen class="fixed inset-0 z-30 flex flex-col bg-bg">
-      <video ref={videoRef} class="min-h-0 w-full flex-1 bg-bg" playsInline onClick={toggle} />
+      <video ref={videoRef} class="min-h-0 w-full flex-1 bg-bg [&::cue]:bg-transparent [&::cue]:text-[1.15rem] [&::cue]:text-fg" playsInline onClick={toggle} />
       <div class="flex flex-col gap-3 border-t border-line bg-surface p-4">
         <div class="flex flex-wrap items-center gap-3">
           <button type="button" data-nav class="min-h-12 rounded-md border border-line px-4" onClick={() => history.back()}>
@@ -277,6 +277,7 @@ export function Player(props: { request: PlayRequest }) {
             step={10}
             value={Math.min(Math.floor(duration), Math.floor(position))}
             aria-label={app.t("play")}
+            class="h-11 w-full accent-accent"
             onInput={(event) => {
               const video = videoRef.current;
               if (!video) return;

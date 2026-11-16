@@ -10,7 +10,7 @@ export function Cover(props: { src?: string; title: string; progress?: number })
   const [broken, setBroken] = useState(false);
   const src = props.src && !broken ? props.src : "";
   return (
-    <div class="poster-frame overflow-hidden rounded-md bg-surface-2">
+    <div class="relative aspect-[2/3] overflow-hidden rounded-md bg-surface-2">
       {src ? (
         <img
           src={src}
@@ -40,7 +40,7 @@ export function TitleLockup(props: { src?: string; title: string }) {
       <img
         src={props.src}
         alt={props.title}
-        class="title-logo"
+        class="block max-h-22 max-w-[min(100%,28rem)] object-contain object-left"
         referrerPolicy="no-referrer"
         onError={() => setBroken(true)}
       />

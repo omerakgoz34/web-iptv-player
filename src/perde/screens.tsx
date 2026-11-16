@@ -21,6 +21,8 @@ export function Login() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const secure = location.protocol === "https:";
+
   const submit = async (event: Event) => {
     event.preventDefault();
     setBusy(true);
@@ -46,12 +48,26 @@ export function Login() {
         <Field id="server" label={app.t("server")} type="url" value={server} placeholder={app.t("serverPlaceholder")} onInput={setServer} autoFocus />
         <Field id="username" label={app.t("username")} type="text" value={username} onInput={setUsername} />
         <Field id="password" label={app.t("password")} type="password" value={password} onInput={setPassword} />
+        {secure ? (
+          <Field
+            id="relay"
+            label={app.t("relay")}
+            type="url"
+            value={app.prefs.relay}
+            placeholder="https://name.workers.dev/?url="
+            onInput={(value) => app.updatePrefs({ relay: value })}
+          />
+        ) : null}
         {error ? <p role="alert" class="text-accent">{error}</p> : null}
+        {secure && error ? <p class="text-sm text-muted">{app.t("relayHelp")}</p> : null}
         <button type="submit" data-nav class="min-h-12 rounded-md bg-accent font-semibold text-on-accent" disabled={busy}>
           {busy ? app.t("connecting") : app.t("connect")}
         </button>
       </form>
       <p class="text-sm text-muted">{app.t("savedOnDevice")}</p>
+      <button type="button" data-nav class="self-start text-sm text-muted" onClick={() => go("/settings")}>
+        {app.t("worker")}
+      </button>
     </main>
   );
 }
