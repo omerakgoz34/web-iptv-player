@@ -1,2 +1,2 @@
 export const APP_NAME = "Web IPTV Player";
-export const VERSION = "v0.1.1";
+export const VERSION = "v0.1.2";
