@@ -114,11 +114,11 @@ export async function fetchCatalog(account: Account): Promise<Catalog> {
   return {
     fetchedAt: Date.now(),
     liveCategories: categories(liveCategories),
-    live: liveItems(live),
+    live: liveItems(live, account.base),
     movieCategories: categories(movieCategories),
-    movies: movieItems(movies),
+    movies: movieItems(movies, account.base),
     seriesCategories: categories(seriesCategories),
-    series: seriesItems(series),
+    series: seriesItems(series, account.base),
   };
 }
 
@@ -137,8 +137,8 @@ export async function fetchVodDetails(account: Account, id: string): Promise<Vod
   const details: VodDetails = {
     name: text(info.name) || text(data.name),
     plot: text(info.plot) || text(info.description),
-    poster: text(info.movie_image) || text(info.cover_big),
-    logo: pickLogo(info) || pickLogo(raw),
+    poster: assetUrl(account.base, info.movie_image) || assetUrl(account.base, info.cover_big),
+    logo: pickLogo(account.base, info) || pickLogo(account.base, raw),
     backdrop: backdrop(info.backdrop_path),
     genre: text(info.genre),
     year: (text(info.releasedate) || text(info.release_date)).slice(0, 4),
@@ -164,12 +164,12 @@ export async function fetchSeriesDetails(account: Account, id: string): Promise<
   }
   const raw = await getJson<Record<string, unknown>>(account, { action: "get_series_info", series_id: id });
   const info = asRecord(raw.info);
-  const episodes = episodesFrom(raw.episodes);
+  const episodes = episodesFrom(raw.episodes, account.base);
   const details: SeriesDetails = {
     name: text(info.name),
     plot: text(info.plot) || text(info.description),
-    poster: text(info.cover),
-    logo: pickLogo(info) || pickLogo(raw),
+    poster: assetUrl(account.base, info.cover),
+    logo: pickLogo(account.base, info) || pickLogo(account.base, raw),
     backdrop: backdrop(info.backdrop_path),
     genre: text(info.genre),
     year: (text(info.releaseDate) || text(info.release_date) || text(info.year)).slice(0, 4),
@@ -301,6 +301,19 @@ function localRelay(url: string): string {
   return relay.toString();
 }
 
+export function proxied(url: string): string {
+  const wrap = mediaRelay();
+  if (wrap) return wrap(url);
+  const relay = loadPrefs().relay.trim();
+  if (relay) return applyRelay(relay, url);
+  return localRelay(url);
+}
+
+export function showAsset(url?: string): string {
+  if (!url) return "";
+  return directBlocked(url) ? proxied(url) : url;
+}
+
 function applyRelay(relay: string, url: string): string {
   if (relay.includes("{url}")) return relay.replaceAll("{url}", encodeURIComponent(url));
   return `${relay}${encodeURIComponent(url)}`;
@@ -331,59 +344,65 @@ function categories(raw: unknown): Category[] {
   return list;
 }
 
-function liveItems(raw: unknown): LiveItem[] {
+function liveItems(raw: unknown, base: string): LiveItem[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item) => {
-    const record = asRecord(item);
-    return {
-      id: text(record.stream_id),
-      name: text(record.name) || "—",
-      poster: text(record.stream_icon),
-      categoryId: text(record.category_id),
-      number: Number(record.num) || 0,
-    };
-  }).filter((item) => item.id);
+  return raw
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        id: text(record.stream_id),
+        name: text(record.name) || "—",
+        poster: firstAsset(base, record, ["stream_icon", "icon", "logo", "stream_logo", "tvg_logo", "cover"]),
+        categoryId: text(record.category_id),
+        number: Number(record.num) || 0,
+      };
+    })
+    .filter((item) => item.id);
 }
 
-function movieItems(raw: unknown): MovieItem[] {
+function movieItems(raw: unknown, base: string): MovieItem[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item) => {
-    const record = asRecord(item);
-    return {
-      id: text(record.stream_id),
-      name: text(record.name) || "—",
-      poster: text(record.stream_icon) || text(record.cover),
-      logo: pickLogo(record),
-      categoryId: text(record.category_id),
-      ext: text(record.container_extension) || "mp4",
-      rating: text(record.rating),
-      plot: text(record.plot),
-      direct: text(record.direct_source),
-      added: text(record.added),
-    };
-  }).filter((item) => item.id);
+  return raw
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        id: text(record.stream_id),
+        name: text(record.name) || "—",
+        poster: firstAsset(base, record, ["stream_icon", "cover", "movie_image", "icon"]),
+        logo: pickLogo(base, record),
+        categoryId: text(record.category_id),
+        ext: text(record.container_extension) || "mp4",
+        rating: text(record.rating),
+        plot: text(record.plot),
+        direct: text(record.direct_source),
+        added: text(record.added),
+      };
+    })
+    .filter((item) => item.id);
 }
 
-function seriesItems(raw: unknown): SeriesItem[] {
+function seriesItems(raw: unknown, base: string): SeriesItem[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item) => {
-    const record = asRecord(item);
-    return {
-      id: text(record.series_id),
-      name: text(record.name) || "—",
-      poster: text(record.cover) || text(record.stream_icon),
-      logo: pickLogo(record),
-      categoryId: text(record.category_id),
-      plot: text(record.plot),
-      rating: text(record.rating),
-      genre: text(record.genre),
-      year: (text(record.releaseDate) || text(record.year)).slice(0, 4),
-      backdrop: backdrop(record.backdrop_path),
-    };
-  }).filter((item) => item.id);
+  return raw
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        id: text(record.series_id),
+        name: text(record.name) || "—",
+        poster: firstAsset(base, record, ["cover", "stream_icon", "movie_image", "icon"]),
+        logo: pickLogo(base, record),
+        categoryId: text(record.category_id),
+        plot: text(record.plot),
+        rating: text(record.rating),
+        genre: text(record.genre),
+        year: (text(record.releaseDate) || text(record.year)).slice(0, 4),
+        backdrop: assetUrl(base, backdrop(record.backdrop_path)),
+      };
+    })
+    .filter((item) => item.id);
 }
 
-function episodesFrom(raw: unknown): SeriesDetails["episodes"] {
+function episodesFrom(raw: unknown, base: string): SeriesDetails["episodes"] {
   const groups = asRecord(raw);
   const episodes: SeriesDetails["episodes"] = [];
   for (const [seasonKey, value] of Object.entries(groups)) {
@@ -401,7 +420,7 @@ function episodesFrom(raw: unknown): SeriesDetails["episodes"] {
         episode,
         title: text(record.title) || `${episode}`,
         plot: text(info.plot) || text(record.plot),
-        poster: text(info.movie_image),
+        poster: assetUrl(base, info.movie_image) || assetUrl(base, record.stream_icon),
         ext: text(record.container_extension) || "mp4",
         duration: Number(info.duration_secs) || parseDuration(info.duration),
       });
@@ -413,15 +432,36 @@ function episodesFrom(raw: unknown): SeriesDetails["episodes"] {
 
 const LOGO_KEYS = ["title_logo", "logo", "stream_logo", "movie_logo", "series_logo", "logo_url"];
 
-function pickLogo(record: Record<string, unknown>): string {
-  for (const key of LOGO_KEYS) {
-    const value = text(record[key]);
-    if (/^https?:\/\//i.test(value)) return value;
-  }
+function pickLogo(base: string, record: Record<string, unknown>): string {
+  const named = firstAsset(base, record, LOGO_KEYS);
+  if (named) return named;
   for (const [key, value] of Object.entries(record)) {
-    if (typeof value === "string" && /logo/i.test(key) && /^https?:\/\//i.test(value)) return value;
+    if (/logo/i.test(key)) {
+      const url = assetUrl(base, value);
+      if (url) return url;
+    }
   }
   return "";
+}
+
+function firstAsset(base: string, record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const url = assetUrl(base, record[key]);
+    if (url) return url;
+  }
+  return "";
+}
+
+function assetUrl(base: string, value: unknown): string {
+  const raw = text(value);
+  if (!raw || /^(null|undefined|none|n\/a)$/i.test(raw)) return "";
+  if (raw.startsWith("//")) return `https:${raw}`;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  try {
+    return new URL(raw, `${base.replace(/\/$/, "")}/`).toString();
+  } catch {
+    return "";
+  }
 }
 
 function backdrop(value: unknown): string {

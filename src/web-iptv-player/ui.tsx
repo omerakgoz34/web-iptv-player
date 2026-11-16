@@ -6,10 +6,11 @@ import { back, go } from "./hash";
 import { IconBack, IconMoon, IconRefresh, IconSun } from "./icons";
 import type { Kind } from "./types";
 import { APP_NAME, VERSION } from "./version";
+import { showAsset } from "./xtream";
 
 export function Cover(props: { src?: string; title: string; progress?: number }) {
   const [broken, setBroken] = useState(false);
-  const src = props.src && !broken ? props.src : "";
+  const src = showAsset(props.src) && !broken ? showAsset(props.src) : "";
   return (
     <div class="relative aspect-[2/3] overflow-hidden rounded-md bg-surface-2">
       {src ? (
@@ -36,10 +37,10 @@ export function Cover(props: { src?: string; title: string; progress?: number })
 
 export function TitleLockup(props: { src?: string; title: string }) {
   const [broken, setBroken] = useState(false);
-  if (props.src && !broken) {
+  if (showAsset(props.src) && !broken) {
     return (
       <img
-        src={props.src}
+        src={showAsset(props.src)}
         alt={props.title}
         class="block max-h-22 max-w-[min(100%,28rem)] object-contain object-left"
         referrerPolicy="no-referrer"

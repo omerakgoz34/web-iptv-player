@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { useApp } from "./context";
 import { go } from "./hash";
 import { IconAudio, IconBack, IconBack10, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
-import { absolutizePlaylist, episodeCode, formatClock } from "./media";
+import { absolutizePlaylist, directBlocked, episodeCode, formatClock } from "./media";
 import { saveLastLive, saveProgress, progressKey } from "./storage";
 import type { PlayRequest } from "./types";
-import { mediaRelay } from "./xtream";
+import { proxied } from "./xtream";
 
 type Track = { id: number; label: string };
 
@@ -70,8 +70,11 @@ export function Player(props: { request: PlayRequest }) {
     if (!video) return;
     video.setAttribute("referrerpolicy", "no-referrer");
     let cancelled = false;
-    let triedRelay = Boolean(mediaRelay());
     const request = props.request;
+    let triedRelay = directBlocked(request.hlsUrl);
+    let usedFile = false;
+    let expecting = false;
+    const native = prefersNativeHls(video);
     setFailed(false);
     setEnded(false);
     setMenu("");
@@ -102,23 +105,41 @@ export function Player(props: { request: PlayRequest }) {
       if (!hlsRef.current && textTracks.length) {
         setSubs(textTracks.map((track, index) => ({ id: index, label: track.label || track.language || String(index + 1) })));
       }
+      const tracks = nativeAudioTracks(video);
+      if (!hlsRef.current && tracks && tracks.length) {
+        const list: Track[] = [];
+        let enabled = 0;
+        for (let index = 0; index < tracks.length; index += 1) {
+          const track = tracks[index];
+          list.push({ id: index, label: track.label || track.language || String(index + 1) });
+          if (track.enabled) enabled = index;
+        }
+        setAudio(list);
+        setAudioId(enabled);
+      }
     };
 
-    const start = async (useRelay: boolean) => {
+    const playable = (url: string, forceRelay: boolean) => (forceRelay || directBlocked(url) ? proxied(url) : url);
+
+    const start = async (forceRelay: boolean) => {
+      expecting = false;
       hlsRef.current?.destroy();
       hlsRef.current = null;
       video.removeAttribute("src");
       video.load();
-      const wrap = useRelay ? mediaRelay() : null;
-      const source = request.hlsUrl;
-      const file = request.fileUrl;
-      const wantHls = !file || source.endsWith(".m3u8");
-      if (wantHls) {
+      const source = playable(request.hlsUrl, forceRelay);
+      const file = request.fileUrl ? playable(request.fileUrl, forceRelay) : "";
+      const wantHls = !request.fileUrl || request.hlsUrl.endsWith(".m3u8");
+      const arm = (url: string) => {
+        video.src = url;
+        expecting = true;
+      };
+      if (wantHls && !native) {
         const mod = await import("hls.js");
         if (cancelled) return;
         const Hls = mod.default;
         if (Hls.isSupported()) {
-          const loader = wrap ? relayLoader(Hls.DefaultConfig.loader, wrap) : undefined;
+          const loader = forceRelay || directBlocked(request.hlsUrl) ? relayLoader(Hls.DefaultConfig.loader, proxied) : undefined;
           const options: Record<string, unknown> = {
             enableWorker: false,
             capLevelToPlayerSize: true,
@@ -139,27 +160,32 @@ export function Player(props: { request: PlayRequest }) {
           hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => setSubs(readTracks(hls.subtitleTracks)));
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data?.fatal || cancelled) return;
-            if (!triedRelay && mediaRelay()) {
+            if (!triedRelay) {
               triedRelay = true;
               void start(true);
               return;
             }
-            if (file) {
+            if (file && !usedFile) {
+              usedFile = true;
               hls.destroy();
               hlsRef.current = null;
-              video.src = wrap ? wrap(file) : file;
-              void video.play().catch(() => setFailed(true));
+              arm(file);
+              void video.play().catch(() => undefined);
               return;
             }
             setFailed(true);
           });
           hls.loadSource(source);
           hls.attachMedia(video);
+          expecting = true;
         } else {
-          video.src = wrap ? wrap(source) : source;
+          arm(source);
         }
+      } else if (wantHls) {
+        arm(source);
       } else if (file) {
-        video.src = wrap ? wrap(file) : file;
+        usedFile = true;
+        arm(file);
       }
       if (request.startAt && request.startAt > 0) {
         const seek = () => {
@@ -175,10 +201,28 @@ export function Player(props: { request: PlayRequest }) {
       }
     };
 
+    const onMediaError = () => {
+      if (!expecting || cancelled || hlsRef.current) return;
+      expecting = false;
+      if (!triedRelay) {
+        triedRelay = true;
+        void start(true);
+        return;
+      }
+      if (request.fileUrl && !usedFile) {
+        usedFile = true;
+        video.src = playable(request.fileUrl, true);
+        expecting = true;
+        void video.play().catch(() => undefined);
+        return;
+      }
+      setFailed(true);
+    };
+
     if (request.kind === "live" && app.account) {
       saveLastLive(app.account.id, { id: request.id, name: request.title, poster: request.poster || "", updatedAt: Date.now() });
     }
-    void start(Boolean(mediaRelay()));
+    void start(triedRelay);
     const onTime = () => {
       setPosition(video.currentTime || 0);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
@@ -194,6 +238,7 @@ export function Player(props: { request: PlayRequest }) {
       setPlaying(false);
       remember();
     };
+    video.addEventListener("error", onMediaError);
     video.addEventListener("timeupdate", onTime);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
@@ -202,6 +247,7 @@ export function Player(props: { request: PlayRequest }) {
     return () => {
       cancelled = true;
       remember();
+      video.removeEventListener("error", onMediaError);
       video.removeEventListener("timeupdate", onTime);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
@@ -230,7 +276,12 @@ export function Player(props: { request: PlayRequest }) {
 
   const chooseAudio = (id: number) => {
     const hls = hlsRef.current;
+    const video = videoRef.current;
     if (hls) hls.audioTrack = id;
+    const tracks = nativeAudioTracks(video);
+    if (tracks) {
+      for (let index = 0; index < tracks.length; index += 1) tracks[index].enabled = index === id;
+    }
     setAudioId(id);
     setMenu("");
   };
@@ -336,6 +387,24 @@ export function Player(props: { request: PlayRequest }) {
       </div>
     </div>
   );
+}
+
+function prefersNativeHls(video: HTMLVideoElement): boolean {
+  const ua = navigator.userAgent;
+  const ios = /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!ios) return false;
+  return video.canPlayType("application/vnd.apple.mpegurl") !== "";
+}
+
+type NativeAudio = {
+  length: number;
+  [index: number]: { label: string; language: string; enabled: boolean };
+};
+
+function nativeAudioTracks(video: HTMLVideoElement | null): NativeAudio | null {
+  if (!video) return null;
+  const tracks = (video as HTMLVideoElement & { audioTracks?: NativeAudio }).audioTracks;
+  return tracks || null;
 }
 
 function readTracks(tracks: Array<{ id?: number; name?: string; lang?: string }> | undefined): Track[] {

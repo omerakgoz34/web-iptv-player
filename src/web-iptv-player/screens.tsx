@@ -8,7 +8,7 @@ import { WORKER } from "./player";
 import { getProgress, loadLastLive, loadProgress } from "./storage";
 import type { Kind, MovieItem, SeriesItem } from "./types";
 import { BackButton, Cover, Field, LangTheme, Shell, TitleLockup, Wordmark } from "./ui";
-import { fetchSeriesDetails, fetchVodDetails } from "./xtream";
+import { fetchSeriesDetails, fetchVodDetails, showAsset } from "./xtream";
 
 const PAGE = 40;
 const browseMemory = new Map<string, { q: string; page: number }>();
@@ -140,7 +140,7 @@ export function Home() {
       ) : null}
       {last ? (
         <button type="button" data-nav class="flex min-h-14 items-center gap-3 self-start rounded-md border border-line bg-surface px-4" onClick={() => go(`/watch/live/${encodeURIComponent(last.id)}`)}>
-          {last.poster ? <img src={last.poster} alt="" class="h-8 w-8 object-contain" referrerPolicy="no-referrer" /> : null}
+          {last.poster ? <img src={showAsset(last.poster)} alt="" class="h-8 w-8 object-contain" referrerPolicy="no-referrer" /> : null}
           <span class="text-sm text-muted">{app.t("lastChannel")}</span>
           <span class="font-semibold">{last.name}</span>
         </button>
@@ -152,6 +152,15 @@ export function Home() {
       </div>
     </Shell>
   );
+}
+
+function ChannelLogo(props: { src?: string; name: string }) {
+  const [broken, setBroken] = useState(false);
+  const src = showAsset(props.src);
+  if (!src || broken) {
+    return <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-2 text-sm">{props.name.slice(0, 1)}</span>;
+  }
+  return <img src={src} alt="" class="h-10 w-10 shrink-0 object-contain" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
 }
 
 function Tile(props: { kind: Kind; title: string; count: number; unit: string; path: string; auto?: boolean }) {
@@ -238,7 +247,7 @@ export function Browse(props: { kind: Kind; category: string }) {
               class="flex min-h-14 items-center gap-3 rounded-md bg-surface px-3 text-left"
               onClick={() => go(`/watch/live/${encodeURIComponent(item.id)}`)}
             >
-              {item.poster ? <img src={item.poster} alt="" class="h-10 w-10 object-contain" referrerPolicy="no-referrer" /> : <span class="flex h-10 w-10 items-center justify-center rounded-md bg-surface-2 text-sm">{item.name.slice(0, 1)}</span>}
+              <ChannelLogo src={item.poster} name={item.name} />
               {"number" in item && item.number ? <span class="w-10 tabular-nums text-muted">{item.number}</span> : null}
               <span class="truncate">{item.name}</span>
             </button>
