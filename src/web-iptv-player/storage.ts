@@ -1,13 +1,16 @@
 import { initialLang } from "./i18n";
 import type { Account, Catalog, LastLive, Prefs, SeriesDetails, VodDetails, WatchPoint } from "./types";
 
-const ACCOUNT = "perde.account";
-const PREFS = "perde.prefs";
-const PROGRESS = "perde.progress";
-const LAST_LIVE = "perde.lastLive";
+const PREFIX = "web-iptv-player";
+const ACCOUNT = `${PREFIX}.account`;
+const PREFS = `${PREFIX}.prefs`;
+const PROGRESS = `${PREFIX}.progress`;
+const LAST_LIVE = `${PREFIX}.lastLive`;
+const DB_NAME = PREFIX;
+const LEGACY_DB = "perde";
 
 export function loadAccount(): Account | null {
-  const raw = readJson<Account>(ACCOUNT);
+  const raw = readStored<Account>(ACCOUNT);
   if (!raw?.base || !raw.username || !raw.password || !raw.id) return null;
   return raw;
 }
@@ -18,10 +21,11 @@ export function saveAccount(account: Account): void {
 
 export function clearAccount(): void {
   localStorage.removeItem(ACCOUNT);
+  localStorage.removeItem("perde.account");
 }
 
 export function loadPrefs(): Prefs {
-  const raw = readJson<Partial<Prefs>>(PREFS) ?? {};
+  const raw = readStored<Partial<Prefs>>(PREFS) ?? {};
   return {
     lang: raw.lang === "en" || raw.lang === "tr" ? raw.lang : initialLang(),
     theme: raw.theme === "light" ? "light" : "dark",
@@ -44,19 +48,19 @@ export function progressKey(accountId: string, kind: "movie" | "episode", id: st
 }
 
 export function loadProgress(accountId: string): WatchPoint[] {
-  const map = readJson<Record<string, WatchPoint>>(PROGRESS) ?? {};
+  const map = readStored<Record<string, WatchPoint>>(PROGRESS) ?? {};
   return Object.values(map)
     .filter((item) => item.key.startsWith(`${accountId}|`))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function getProgress(accountId: string, kind: "movie" | "episode", id: string): WatchPoint | null {
-  const map = readJson<Record<string, WatchPoint>>(PROGRESS) ?? {};
+  const map = readStored<Record<string, WatchPoint>>(PROGRESS) ?? {};
   return map[progressKey(accountId, kind, id)] ?? null;
 }
 
 export function saveProgress(point: WatchPoint): void {
-  const map = readJson<Record<string, WatchPoint>>(PROGRESS) ?? {};
+  const map = readStored<Record<string, WatchPoint>>(PROGRESS) ?? {};
   map[point.key] = point;
   writeJson(PROGRESS, map);
 }
@@ -64,9 +68,10 @@ export function saveProgress(point: WatchPoint): void {
 export function clearProgress(accountId?: string): void {
   if (!accountId) {
     localStorage.removeItem(PROGRESS);
+    localStorage.removeItem("perde.progress");
     return;
   }
-  const map = readJson<Record<string, WatchPoint>>(PROGRESS) ?? {};
+  const map = readStored<Record<string, WatchPoint>>(PROGRESS) ?? {};
   for (const key of Object.keys(map)) {
     if (key.startsWith(`${accountId}|`)) delete map[key];
   }
@@ -74,12 +79,12 @@ export function clearProgress(accountId?: string): void {
 }
 
 export function loadLastLive(accountId: string): LastLive | null {
-  const map = readJson<Record<string, LastLive>>(LAST_LIVE) ?? {};
+  const map = readStored<Record<string, LastLive>>(LAST_LIVE) ?? {};
   return map[accountId] ?? null;
 }
 
 export function saveLastLive(accountId: string, item: LastLive): void {
-  const map = readJson<Record<string, LastLive>>(LAST_LIVE) ?? {};
+  const map = readStored<Record<string, LastLive>>(LAST_LIVE) ?? {};
   map[accountId] = item;
   writeJson(LAST_LIVE, map);
 }
@@ -118,6 +123,14 @@ function readJson<T>(key: string): T | null {
   }
 }
 
+function readStored<T>(key: string): T | null {
+  const current = readJson<T>(key);
+  if (current) return current;
+  const legacy = readJson<T>(key.replace(`${PREFIX}.`, "perde."));
+  if (legacy) writeJson(key, legacy);
+  return legacy;
+}
+
 function writeJson(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -126,9 +139,9 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
-function openDb(): Promise<IDBDatabase> {
+function openDb(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("perde", 1);
+    const request = indexedDB.open(name, 1);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
@@ -140,21 +153,31 @@ function openDb(): Promise<IDBDatabase> {
 
 async function idbGet<T>(key: string): Promise<T | null> {
   try {
-    const db = await openDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction("kv", "readonly");
-      const request = tx.objectStore("kv").get(key);
-      request.onsuccess = () => resolve((request.result as T | undefined) ?? null);
-      request.onerror = () => reject(request.error);
-    });
+    const current = await idbRead<T>(DB_NAME, key);
+    if (current != null) return current;
+    const legacy = await idbRead<T>(LEGACY_DB, key);
+    if (legacy != null) await idbSet(key, legacy);
+    return legacy;
   } catch {
     return null;
   }
 }
 
+function idbRead<T>(name: string, key: string): Promise<T | null> {
+  return openDb(name).then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction("kv", "readonly");
+        const request = tx.objectStore("kv").get(key);
+        request.onsuccess = () => resolve((request.result as T | undefined) ?? null);
+        request.onerror = () => reject(request.error);
+      }),
+  );
+}
+
 async function idbSet(key: string, value: unknown): Promise<void> {
   try {
-    const db = await openDb();
+    const db = await openDb(DB_NAME);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction("kv", "readwrite");
       tx.objectStore("kv").put(value, key);

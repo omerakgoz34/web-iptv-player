@@ -7,7 +7,7 @@ import { episodeCode, formatClock } from "./media";
 import { WORKER } from "./player";
 import { getProgress, loadLastLive, loadProgress } from "./storage";
 import type { Kind, MovieItem, SeriesItem } from "./types";
-import { BackButton, Cover, Field, LangTheme, Shell, TitleLockup } from "./ui";
+import { BackButton, Cover, Field, LangTheme, Shell, TitleLockup, Wordmark } from "./ui";
 import { fetchSeriesDetails, fetchVodDetails } from "./xtream";
 
 const PAGE = 40;
@@ -35,10 +35,7 @@ export function Login() {
   return (
     <main data-screen class="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center gap-6 p-4">
       <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2 text-lg font-semibold tracking-wide">
-          <span class="inline-block h-3 w-3 bg-accent" />
-          PERDE
-        </div>
+        <Wordmark />
         <div class="flex items-center gap-2">
           <LangTheme />
         </div>
@@ -83,10 +80,7 @@ export function Status(props: { error?: boolean }) {
     : app.t("loadingList");
   return (
     <main data-screen class="mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center gap-4 p-4">
-      <div class="flex items-center gap-2 text-lg font-semibold tracking-wide">
-        <span class="inline-block h-3 w-3 bg-accent" />
-        PERDE
-      </div>
+      <Wordmark />
       <p role={props.error ? "alert" : "status"}>{message}</p>
       {props.error ? (
         <div class="flex flex-wrap gap-2">

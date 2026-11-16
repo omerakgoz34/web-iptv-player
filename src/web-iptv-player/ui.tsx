@@ -5,6 +5,7 @@ import { useApp } from "./context";
 import { back, go } from "./hash";
 import { IconBack, IconMoon, IconRefresh, IconSun } from "./icons";
 import type { Kind } from "./types";
+import { APP_NAME, VERSION } from "./version";
 
 export function Cover(props: { src?: string; title: string; progress?: number }) {
   const [broken, setBroken] = useState(false);
@@ -49,14 +50,25 @@ export function TitleLockup(props: { src?: string; title: string }) {
   return <h1 class="text-balance text-3xl font-semibold leading-tight text-fg md:text-4xl">{props.title}</h1>;
 }
 
+export function Wordmark() {
+  return (
+    <span class="flex items-center gap-2 text-lg font-semibold tracking-wide">
+      <span class="inline-block h-3 w-3 shrink-0 bg-accent" />
+      <span class="flex flex-col items-start leading-tight">
+        <span>{APP_NAME}</span>
+        <span class="text-xs font-normal text-muted">{VERSION}</span>
+      </span>
+    </span>
+  );
+}
+
 export function Shell(props: { children: ComponentChildren; active?: "home" | Kind | "settings" }) {
   const app = useApp();
   return (
     <div data-screen class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 p-4 md:p-8">
       <header class="flex flex-wrap items-center gap-2 border-b border-line pb-4">
-        <button type="button" data-nav class="mr-auto flex min-h-12 items-center gap-2 pr-2 text-lg font-semibold tracking-wide" onClick={() => go("/")}>
-          <span class="inline-block h-3 w-3 bg-accent" />
-          PERDE
+        <button type="button" data-nav class="mr-auto flex min-h-12 items-center pr-2 text-left" onClick={() => go("/")}>
+          <Wordmark />
         </button>
         <NavButton label={app.t("live")} path="/live" active={props.active === "live"} />
         <NavButton label={app.t("movies")} path="/movies" active={props.active === "movie"} />

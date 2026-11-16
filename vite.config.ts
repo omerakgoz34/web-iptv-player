@@ -5,7 +5,7 @@ import { attachIptvRelay } from "./scripts/iptv-relay.mjs";
 
 function iptvRelayPlugin() {
   return {
-    name: "perde-iptv-relay",
+    name: "web-iptv-player-relay",
     configureServer(server) {
       attachIptvRelay(server.middlewares);
     },
