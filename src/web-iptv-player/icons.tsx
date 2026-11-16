@@ -1,11 +1,11 @@
 /** @jsxImportSource preact */
 import type { ComponentChildren } from "preact";
 
-function Svg(props: { children: ComponentChildren }) {
+function Svg(props: { children: ComponentChildren; large?: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      class="h-5 w-5"
+      class={props.large ? "h-7 w-7" : "h-5 w-5"}
       fill="none"
       stroke="currentColor"
       stroke-width="2"
@@ -52,18 +52,57 @@ export function IconMoon() {
   );
 }
 
-export function IconPlay() {
+export function IconPlay(props: { large?: boolean }) {
   return (
-    <Svg>
+    <Svg large={props.large}>
       <path d="M8 5v14l11-7z" />
     </Svg>
   );
 }
 
-export function IconPause() {
+export function IconPause(props: { large?: boolean }) {
   return (
-    <Svg>
+    <Svg large={props.large}>
       <path d="M9 5v14M15 5v14" />
+    </Svg>
+  );
+}
+
+export function IconBack10() {
+  return (
+    <svg viewBox="0 0 24 24" class="h-7 w-7" aria-hidden="true">
+      <path d="M11 6.5a5.5 5.5 0 1 0 1.4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M12.6 4.2 10.4 6.8l3.2 1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="12" y="16" text-anchor="middle" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text>
+    </svg>
+  );
+}
+
+export function IconFwd10() {
+  return (
+    <svg viewBox="0 0 24 24" class="h-7 w-7" aria-hidden="true">
+      <path d="M13 6.5a5.5 5.5 0 1 1-1.4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      <path d="M11.4 4.2 13.6 6.8l-3.2 1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="12" y="16" text-anchor="middle" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text>
+    </svg>
+  );
+}
+
+export function IconAudio(props: { large?: boolean }) {
+  return (
+    <Svg large={props.large}>
+      <path d="M4 10v4h3l4 3V7L7 10H4z" />
+      <path d="M16 9.5a3.5 3.5 0 0 1 0 5" />
+      <path d="M18.5 7a7 7 0 0 1 0 10" />
+    </Svg>
+  );
+}
+
+export function IconSubs(props: { large?: boolean }) {
+  return (
+    <Svg large={props.large}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M7 15h3M12 15h5" />
     </Svg>
   );
 }

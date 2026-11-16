@@ -1,13 +1,12 @@
 import type { Lang } from "./types";
 
 const tr = {
-  tagline: "Televizyon için sade bir yayın uygulaması.",
   server: "Sunucu adresi",
   username: "Kullanıcı adı",
   password: "Şifre",
   connect: "Bağlan",
   connecting: "Bağlanıyor…",
-  live: "Canlı",
+  live: "Canlı TV",
   movies: "Filmler",
   series: "Diziler",
   refresh: "Yenile",
@@ -72,15 +71,14 @@ const tr = {
 };
 
 const en: { [K in keyof typeof tr]: string } = {
-  tagline: "A quiet player for the television.",
   server: "Server address",
   username: "Username",
   password: "Password",
   connect: "Connect",
   connecting: "Connecting…",
-  live: "Live",
+  live: "Live TV",
   movies: "Movies",
-  series: "Series",
+  series: "Shows",
   refresh: "Refresh",
   refreshing: "Refreshing…",
   settings: "Settings",

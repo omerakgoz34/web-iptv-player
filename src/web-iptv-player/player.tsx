@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useApp } from "./context";
 import { go } from "./hash";
-import { IconPause, IconPlay } from "./icons";
+import { IconAudio, IconBack, IconBack10, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
 import { absolutizePlaylist, episodeCode, formatClock } from "./media";
 import { saveLastLive, saveProgress, progressKey } from "./storage";
 import type { PlayRequest } from "./types";
@@ -257,8 +257,8 @@ export function Player(props: { request: PlayRequest }) {
       <video ref={videoRef} class="min-h-0 w-full flex-1 bg-bg [&::cue]:bg-transparent [&::cue]:text-[1.15rem] [&::cue]:text-fg" playsInline onClick={toggle} />
       <div class="flex flex-col gap-3 border-t border-line bg-surface p-4">
         <div class="flex flex-wrap items-center gap-3">
-          <button type="button" data-nav class="min-h-12 rounded-md border border-line px-4" onClick={() => history.back()}>
-            {app.t("back")}
+          <button type="button" data-nav class="flex min-h-12 min-w-12 items-center justify-center rounded-md border border-line" aria-label={app.t("back")} onClick={() => history.back()}>
+            <IconBack />
           </button>
           <div class="min-w-0 flex-1">
             <div class="truncate font-semibold">{props.request.subtitle || props.request.title}</div>
@@ -286,20 +286,20 @@ export function Player(props: { request: PlayRequest }) {
           />
         ) : null}
         <div class="flex flex-wrap gap-2">
-          <button type="button" data-nav data-autofocus class="min-h-14 min-w-16 rounded-md border border-line px-4 text-lg font-semibold" aria-label={app.t("back10")} onClick={() => seek(-10)}>
-            −10
+          <button type="button" data-nav data-autofocus class="flex min-h-14 min-w-14 items-center justify-center rounded-md border border-line" aria-label={app.t("back10")} onClick={() => seek(-10)}>
+            <IconBack10 />
           </button>
-          <button type="button" data-nav class="flex min-h-14 min-w-16 items-center justify-center rounded-md bg-accent px-4 text-on-accent" aria-label={playing ? app.t("pause") : app.t("play")} onClick={toggle}>
-            {playing ? <IconPause /> : <IconPlay />}
+          <button type="button" data-nav class="flex min-h-14 min-w-14 items-center justify-center rounded-md bg-accent text-on-accent" aria-label={playing ? app.t("pause") : app.t("play")} onClick={toggle}>
+            {playing ? <IconPause large /> : <IconPlay large />}
           </button>
-          <button type="button" data-nav class="min-h-14 min-w-16 rounded-md border border-line px-4 text-lg font-semibold" aria-label={app.t("fwd10")} onClick={() => seek(10)}>
-            +10
+          <button type="button" data-nav class="flex min-h-14 min-w-14 items-center justify-center rounded-md border border-line" aria-label={app.t("fwd10")} onClick={() => seek(10)}>
+            <IconFwd10 />
           </button>
-          <button type="button" data-nav class="min-h-14 rounded-md border border-line px-4" onClick={() => setMenu(menu === "audio" ? "" : "audio")}>
-            {app.t("audio")}
+          <button type="button" data-nav class={`flex min-h-14 min-w-14 items-center justify-center rounded-md ${menu === "audio" ? "bg-accent text-on-accent" : "border border-line"}`} aria-label={app.t("audio")} aria-pressed={menu === "audio"} onClick={() => setMenu(menu === "audio" ? "" : "audio")}>
+            <IconAudio large />
           </button>
-          <button type="button" data-nav class="min-h-14 rounded-md border border-line px-4" onClick={() => setMenu(menu === "sub" ? "" : "sub")}>
-            {app.t("subtitles")}
+          <button type="button" data-nav class={`flex min-h-14 min-w-14 items-center justify-center rounded-md ${menu === "sub" ? "bg-accent text-on-accent" : "border border-line"}`} aria-label={app.t("subtitles")} aria-pressed={menu === "sub"} onClick={() => setMenu(menu === "sub" ? "" : "sub")}>
+            <IconSubs large />
           </button>
         </div>
         {menu ? (

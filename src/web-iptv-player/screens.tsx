@@ -40,7 +40,6 @@ export function Login() {
           <LangTheme />
         </div>
       </div>
-      <p class="text-muted">{app.t("tagline")}</p>
       <form class="flex flex-col gap-4" onSubmit={submit}>
         <Field id="server" label={app.t("server")} type="url" value={server} placeholder={app.t("serverPlaceholder")} onInput={setServer} autoFocus />
         <Field id="username" label={app.t("username")} type="text" value={username} onInput={setUsername} />
@@ -62,8 +61,8 @@ export function Login() {
         </button>
       </form>
       <p class="text-sm text-muted">{app.t("savedOnDevice")}</p>
-      <button type="button" data-nav class="self-start text-sm text-muted" onClick={() => go("/settings")}>
-        {app.t("worker")}
+      <button type="button" data-nav class="min-h-12 self-start rounded-md border border-line bg-surface px-4" onClick={() => go("/settings")}>
+        {app.t("settings")}
       </button>
     </main>
   );
