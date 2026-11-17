@@ -88,8 +88,6 @@ async function load(url, headers) {
 function reachable(url) {
   const target = new URL(url);
   if (!isIp(target.hostname)) return url;
-  const port = target.port || (target.protocol === "https:" ? "443" : "80");
-  if (port !== "80" && port !== "443") return url;
   target.hostname = \`\${target.hostname}.sslip.io\`;
   return target.toString();
 }
@@ -734,10 +732,11 @@ function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; r
   const urls: string[] = [];
   const file = request.fileUrl || "";
   const path = file.split("?")[0]?.toLowerCase() || "";
-  const badFile = /\.(mkv|avi|wmv|flv|mpg|mpeg|divx)$/.test(path);
+  const extension = path.split(".").pop() || "";
+  const fileOnly = /^(mkv|avi|wmv|flv|mpg|mpeg|divx)$/.test(extension);
   if (request.kind !== "live") {
-    if (request.hlsUrl) urls.push(request.hlsUrl);
-    if (file && file !== request.hlsUrl && !(ios && badFile)) urls.push(file);
+    if (request.hlsUrl && !fileOnly) urls.push(request.hlsUrl);
+    if (file && file !== request.hlsUrl) urls.push(file);
   } else if (request.hlsUrl) {
     urls.push(request.hlsUrl);
     const ts = request.hlsUrl.replace(/\.m3u8(?=$|\?)/i, ".ts");
