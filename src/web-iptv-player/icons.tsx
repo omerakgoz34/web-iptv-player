@@ -108,3 +108,15 @@ export function IconSubs(props: { large?: boolean }) {
     </Svg>
   );
 }
+
+export function IconFull(props: { on?: boolean }) {
+  return (
+    <Svg>
+      {props.on ? (
+        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+      ) : (
+        <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+      )}
+    </Svg>
+  );
+}

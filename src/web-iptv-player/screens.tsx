@@ -99,9 +99,9 @@ export function Home() {
   const app = useApp();
   const catalog = app.catalog;
   if (!catalog || !app.account) return null;
-  const points = loadProgress(app.account.id)
-    .filter((item) => item.position > 15 && (item.duration <= 0 || item.position / item.duration < 0.95))
-    .slice(0, 12);
+  const points = loadProgress(app.account.id).filter((item) => item.position > 10 && (item.duration <= 0 || item.position / item.duration < 0.95));
+  const lastEpisode = points.find((item) => item.kind === "episode");
+  const resume = [...points.filter((item) => item.kind === "movie"), ...(lastEpisode ? [lastEpisode] : [])].sort((a, b) => b.updatedAt - a.updatedAt);
   const last = loadLastLive(app.account.id);
   return (
     <Shell active="home">
@@ -109,11 +109,11 @@ export function Home() {
         {app.t("updated")} {formatWhen(app.lang, catalog.fetchedAt)}
       </p>
       {app.boot === "error" ? <p role="alert" class="text-accent">{app.bootError === "blocked" ? app.t("errorBlocked") : app.t("errorNetwork")}</p> : null}
-      {points.length ? (
+      {resume.length ? (
         <section class="flex flex-col gap-3">
           <h2 class="text-xl font-semibold">{app.t("continueWatching")}</h2>
           <div class="flex gap-3 overflow-x-auto pb-2">
-            {points.map((item) => (
+            {resume.map((item) => (
               <button
                 key={item.key}
                 type="button"
