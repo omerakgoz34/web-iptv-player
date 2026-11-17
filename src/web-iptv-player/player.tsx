@@ -4,6 +4,7 @@ import { useApp } from "./context";
 import { go } from "./hash";
 import { IconAudio, IconBack, IconBack10, IconFull, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
 import { absolutizePlaylist, directBlocked, episodeCode, formatClock } from "./media";
+import { LiveMpegAudio, prepareSegment } from "./mpeg-live";
 import { saveLastLive, saveProgress, progressKey, loadPrefs } from "./storage";
 import type { PlayRequest } from "./types";
 import { proxied } from "./xtream";
@@ -264,6 +265,7 @@ export function Player(props: { request: PlayRequest }) {
   const chromeTimer = useRef(0);
   const holdChrome = useRef(false);
   const hlsRef = useRef<{ destroy: () => void; audioTrack: number; subtitleTrack: number } | null>(null);
+  const soundRef = useRef<LiveMpegAudio | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -341,10 +343,12 @@ export function Player(props: { request: PlayRequest }) {
       }, 12000);
     };
 
-    const begin = (url: string, raw: string, mine: number) => {
+    const begin = (url: string, raw: string, mine: number, software = false) => {
       expecting = false;
       hlsRef.current?.destroy();
       hlsRef.current = null;
+      soundRef.current?.stop();
+      soundRef.current = null;
       const arm = () => {
         if (mine !== token || cancelled) return;
         video.src = url;
@@ -361,7 +365,7 @@ export function Player(props: { request: PlayRequest }) {
         });
         watch();
       };
-      if (!isHls(raw) || native) {
+      if (!isHls(raw) || (native && !software)) {
         arm();
         return;
       }
@@ -369,11 +373,12 @@ export function Player(props: { request: PlayRequest }) {
         if (cancelled || mine !== token) return;
         const Hls = mod.default;
         if (!Hls.isSupported()) {
-          arm();
+          if (software) advance();
+          else arm();
           return;
         }
         const proxiedAlready = url !== raw;
-        const loader = proxiedAlready ? undefined : relayLoader(Hls.DefaultConfig.loader, proxied);
+        const loader = software ? softwareLoader(Hls.DefaultConfig.loader, video, soundRef) : proxiedAlready ? undefined : relayLoader(Hls.DefaultConfig.loader, proxied);
         const vod = request.kind !== "live";
         const options: Record<string, unknown> = {
           enableWorker: false,
@@ -427,7 +432,7 @@ export function Player(props: { request: PlayRequest }) {
           continue;
         }
         if (via) {
-          begin(via, attempt.raw, mine);
+          begin(via, attempt.raw, mine, Boolean(attempt.software));
           return;
         }
         step += 1;
@@ -463,6 +468,7 @@ export function Player(props: { request: PlayRequest }) {
     void spin(token);
     const onTime = () => {
       if (video.currentTime > 0.3) stopWatch();
+      soundRef.current?.sync();
       setPosition(video.currentTime || 0);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       if (video.currentTime > 0 && Math.floor(video.currentTime) % 5 === 0) remember();
@@ -500,6 +506,8 @@ export function Player(props: { request: PlayRequest }) {
     return () => {
       cancelled = true;
       stopWatch();
+      soundRef.current?.stop();
+      soundRef.current = null;
       remember();
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("timeupdate", onTime);
@@ -529,6 +537,7 @@ export function Player(props: { request: PlayRequest }) {
   const toggle = () => {
     const video = videoRef.current;
     if (!video) return;
+    soundRef.current?.resume();
     if (video.paused) void video.play();
     else video.pause();
   };
@@ -555,6 +564,7 @@ export function Player(props: { request: PlayRequest }) {
 
   holdChrome.current = menu !== "" || failed || ended;
   const nudge = () => {
+    soundRef.current?.resume();
     window.clearTimeout(chromeTimer.current);
     if (!chromeShown.current) {
       chromeShown.current = true;
@@ -728,7 +738,7 @@ export function Player(props: { request: PlayRequest }) {
   );
 }
 
-function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; relay: boolean }> {
+function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; relay: boolean; software?: boolean }> {
   const urls: string[] = [];
   const file = request.fileUrl || "";
   const path = file.split("?")[0]?.toLowerCase() || "";
@@ -738,6 +748,13 @@ function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; r
     if (request.hlsUrl && !fileOnly) urls.push(request.hlsUrl);
     if (file && file !== request.hlsUrl) urls.push(file);
   } else if (request.hlsUrl) {
+    if (ios) {
+      const preferRelay = Boolean(loadPrefs().relay.trim()) || loadPrefs().forceRelay || directBlocked(request.hlsUrl);
+      return [
+        { raw: request.hlsUrl, relay: preferRelay, software: false },
+        { raw: request.hlsUrl, relay: preferRelay, software: true },
+      ];
+    }
     urls.push(request.hlsUrl);
     const ts = request.hlsUrl.replace(/\.m3u8(?=$|\?)/i, ".ts");
     if (ts !== request.hlsUrl) urls.push(ts);
@@ -849,6 +866,35 @@ function labelTrack(label: string, lang: "tr" | "en", index: number): string {
     }
   }
   return label || String(index + 1);
+}
+
+function softwareLoader(Base: new (...args: any[]) => any, video: HTMLVideoElement, soundRef: { current: LiveMpegAudio | null }) {
+  return class extends Base {
+    load(context: { url?: string; frag?: { start?: number } }, config: unknown, callbacks: RelayCallbacks) {
+      const onSuccess = callbacks.onSuccess;
+      const wrapped: RelayCallbacks = {
+        ...callbacks,
+        onSuccess: (response, stats, ctx, details) => {
+          const raw = response.data instanceof ArrayBuffer
+            ? response.data
+            : ArrayBuffer.isView(response.data)
+              ? response.data.buffer.slice(response.data.byteOffset, response.data.byteOffset + response.data.byteLength)
+              : null;
+          if (raw instanceof ArrayBuffer) {
+            const prepared = prepareSegment(raw);
+            response.data = prepared.media;
+            if (prepared.audio?.length) {
+              if (!soundRef.current) soundRef.current = new LiveMpegAudio(video);
+              const start = typeof context.frag?.start === "number" ? context.frag.start : video.currentTime;
+              soundRef.current.push(prepared.audio, start);
+            }
+          }
+          onSuccess(response, stats, ctx, details);
+        },
+      };
+      super.load(context, config, wrapped);
+    }
+  };
 }
 
 function relayLoader(Base: new (...args: any[]) => any, wrap: (url: string) => string) {
