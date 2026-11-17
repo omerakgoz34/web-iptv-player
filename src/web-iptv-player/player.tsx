@@ -71,6 +71,7 @@ export default {
 async function load(url, headers) {
   let current = url;
   for (let hop = 0; hop < 5; hop += 1) {
+    current = reachable(current);
     const target = new URL(current);
     const response = isIp(target.hostname) ? await fetchIp(target, headers) : await fetch(target, { headers, redirect: "manual" });
     if (response.status >= 300 && response.status < 400) {
@@ -84,6 +85,15 @@ async function load(url, headers) {
   return { response: new Response("redirect", { status: 502 }), url: current };
 }
 
+function reachable(url) {
+  const target = new URL(url);
+  if (!isIp(target.hostname)) return url;
+  const port = target.port || (target.protocol === "https:" ? "443" : "80");
+  if (port !== "80" && port !== "443") return url;
+  target.hostname = \`\${target.hostname}.sslip.io\`;
+  return target.toString();
+}
+
 function isIp(host) {
   return /^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(host) || host.includes(":");
 }
@@ -91,7 +101,7 @@ function isIp(host) {
 async function fetchIp(target, headers) {
   const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
   if (target.protocol === "https:") throw new Error("https ip");
-  const socket = connect({ hostname: target.hostname, port });
+  const socket = connect({ hostname: \`\${target.hostname}.sslip.io\`, port }, { allowHalfOpen: true });
   const path = \`\${target.pathname || "/"}\${target.search}\`;
   const lines = [
     \`GET \${path} HTTP/1.1\`,
@@ -119,8 +129,9 @@ async function readSocket(readable) {
     buffer = append(buffer, value);
     split = find(buffer, "\\r\\n\\r\\n");
   }
-  const headerText = new TextDecoder().decode(buffer.slice(0, Math.max(0, split)));
-  const rest = split >= 0 ? buffer.slice(split + 4) : new Uint8Array(0);
+  if (split < 0) throw new Error("stream server closed the connection");
+  const headerText = new TextDecoder().decode(buffer.slice(0, split));
+  const rest = buffer.slice(split + 4);
   const lines = headerText.split("\\r\\n");
   const status = Number((lines[0] || "").split(" ")[1]) || 502;
   const headers = new Headers();
