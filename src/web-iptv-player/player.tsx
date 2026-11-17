@@ -53,17 +53,26 @@ export default {
         return new Response(body, { status: 200, headers: { ...cors, "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" } });
       }
       const out = new Headers();
-      for (const name of ["content-type", "content-range", "accept-ranges"]) {
+      for (const name of ["content-type", "content-range", "accept-ranges", "content-length"]) {
         const value = loaded.response.headers.get(name);
         if (value) out.set(name, value);
       }
       const path = new URL(loaded.url).pathname;
       if (/\\.mp4(\\?|$)/i.test(path) && !(out.get("content-type") || "").startsWith("video/")) out.set("content-type", "video/mp4");
       if (/\\.ts(\\?|$)/i.test(path) && !out.get("content-type")) out.set("content-type", "video/mp2t");
+      if (/\\.mkv(\\?|$)/i.test(path)) out.set("content-type", "video/x-matroska");
       out.set("cache-control", "no-store");
       out.set("access-control-allow-origin", "*");
       out.set("access-control-expose-headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type");
-      return new Response(loaded.response.body, { status: loaded.response.status, headers: out });
+      const status = loaded.response.status;
+      const declared = Number(out.get("content-length"));
+      if (status === 206 && (!Number.isFinite(declared) || declared <= 8 * 1024 * 1024)) {
+        const body = await loaded.response.arrayBuffer();
+        out.set("content-length", String(body.byteLength));
+        if (!out.get("accept-ranges")) out.set("accept-ranges", "bytes");
+        return new Response(body, { status, headers: out });
+      }
+      return new Response(loaded.response.body, { status, headers: out });
     } catch (error) {
       return new Response(String(error && error.message ? error.message : error), { status: 502, headers: cors });
     }

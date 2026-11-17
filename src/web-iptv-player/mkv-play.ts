@@ -9,7 +9,7 @@ type Ac3Decoder = {
 
 const VIDEO_TIMESCALE = 24000;
 const FRAME_TICKS = 1001;
-const CHUNK = 2 * 1024 * 1024;
+const CHUNK = 512 * 1024;
 
 export function playMatroska(
   video: HTMLVideoElement,
@@ -125,6 +125,7 @@ async function run(
   let dts = -1;
   let started = false;
   let needKey = true;
+  let misses = 0;
   while (!stopped()) {
     const ep = epoch;
     if (seekTo != null) {
@@ -174,7 +175,16 @@ async function run(
     }
     await waitForRoom(video, stopped, () => epoch !== ep);
     if (ep !== epoch || stopped()) continue;
-    const cluster = await nextCluster(url, pending, header, header.audioTrack, header.videoTrack);
+    let cluster: { video: Sample[]; audio: Sample[]; next: number } | null = null;
+    try {
+      cluster = await nextCluster(url, pending, header, header.audioTrack, header.videoTrack);
+      misses = 0;
+    } catch {
+      misses += 1;
+      if (misses >= 8 && !started) throw new Error("network");
+      await waitFor(video, stopped, () => epoch !== ep, 400 * Math.min(misses, 5));
+      continue;
+    }
     if (ep !== epoch || stopped()) continue;
     if (!cluster) {
       offset = header.fileSize;
@@ -851,6 +861,7 @@ class Ac3Output {
   sync(): void {
     const context = this.context;
     if (!context || !this.gain) return;
+    if (context.state === "suspended") void context.resume();
     if (this.video.paused) {
       this.stopSource();
       return;
@@ -870,7 +881,9 @@ class Ac3Output {
     this.activeAt = context.currentTime;
     source.start(context.currentTime, offset);
     source.onended = () => {
-      if (this.active === source) this.active = null;
+      if (this.active !== source) return;
+      this.active = null;
+      this.sync();
     };
   }
 
@@ -1145,12 +1158,25 @@ function bitAt(data: Uint8Array, bit: number): boolean {
 }
 
 async function fetchRange(url: string, start: number, end: number): Promise<{ data: Uint8Array; total: number }> {
-  const response = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
-  if (!response.ok && response.status !== 206) throw new Error(String(response.status));
-  const total = totalSize(response.headers.get("content-range")) || Number(response.headers.get("content-length")) || end + 1;
-  const data = new Uint8Array(await response.arrayBuffer());
-  if (response.status === 200 && start > 0) return { data: data.subarray(start, end + 1), total: data.length };
-  return { data, total };
+  let last = "network";
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await fetch(url, { cache: "no-store", headers: { Range: `bytes=${start}-${end}` } });
+      if (!response.ok && response.status !== 206) throw new Error(String(response.status));
+      const total = totalSize(response.headers.get("content-range")) || Number(response.headers.get("content-length")) || end + 1;
+      const data = new Uint8Array(await response.arrayBuffer());
+      if (!data.byteLength) throw new Error("empty");
+      const expected = end - start + 1;
+      if (response.status === 200 && start > 0 && data.byteLength > expected + 1024) {
+        return { data: data.subarray(start, Math.min(data.length, end + 1)), total: data.length };
+      }
+      return { data, total };
+    } catch (error) {
+      last = error instanceof Error ? error.message : "network";
+      await new Promise((resolve) => window.setTimeout(resolve, 200 * (attempt + 1)));
+    }
+  }
+  throw new Error(last);
 }
 
 function totalSize(header: string | null): number {
