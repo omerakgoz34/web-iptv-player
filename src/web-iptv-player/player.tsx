@@ -10,57 +10,226 @@ import { proxied } from "./xtream";
 
 type Track = { id: number; label: string };
 
-const WORKER = `export default {
+const WORKER = `import { connect } from "cloudflare:sockets";
+
+const cors = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "*",
+  "access-control-allow-methods": "GET,HEAD,OPTIONS",
+  "access-control-expose-headers": "*",
+};
+
+export default {
   async fetch(request) {
-    const cors = {
-      "access-control-allow-origin": "*",
-      "access-control-allow-headers": "*",
-      "access-control-allow-methods": "GET,HEAD,OPTIONS",
-      "access-control-expose-headers": "*"
-    };
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const here = new URL(request.url);
     const target = here.searchParams.get("url");
     if (!target) return new Response("missing", { status: 400, headers: cors });
     let parsed;
-    try { parsed = new URL(target); }
-    catch { return new Response("bad", { status: 400, headers: cors }); }
+    try {
+      parsed = new URL(target);
+    } catch {
+      return new Response("bad", { status: 400, headers: cors });
+    }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return new Response("blocked", { status: 400, headers: cors });
-    const pathList = /\\.m3u8?(\\?|$)/i.test(parsed.pathname);
+    const relay = here.origin + here.pathname + "?url=";
     const headers = new Headers();
     const range = request.headers.get("range");
-    if (range && !pathList) headers.set("range", range);
+    if (range && !/\\.m3u8?(\\?|$)/i.test(parsed.pathname)) headers.set("range", range);
     headers.set("user-agent", request.headers.get("user-agent") || "Mozilla/5.0");
     headers.set("accept", "*/*");
-    headers.set("referer", parsed.origin + "/");
-    const upstream = await fetch(parsed, { headers, redirect: "follow" });
-    const type = upstream.headers.get("content-type") || "";
-    const relay = here.origin + here.pathname + "?url=";
-    if ((pathList || /mpegurl|vnd\\.apple/i.test(type)) && request.method !== "HEAD") {
-      const text = await upstream.text();
-      if (!text.includes("#EXTM3U")) return new Response(text, { status: upstream.status >= 400 ? upstream.status : 502, headers: { ...cors, "content-type": type || "text/plain" } });
-      const abs = (u) => { try { return new URL(u, upstream.url).toString(); } catch { return u; } };
-      const body = text.split(/\\r?\\n/).map((line) => {
-        const t = line.trim();
-        if (!t) return line;
-        if (t.startsWith("#")) return line.replace(/URI="([^"]+)"/g, (_, u) => 'URI="' + relay + encodeURIComponent(abs(u)) + '"');
-        return relay + encodeURIComponent(abs(t));
-      }).join("\\n");
-      return new Response(body, { status: 200, headers: { ...cors, "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" } });
+    try {
+      const loaded = await load(parsed.toString(), headers);
+      const type = loaded.response.headers.get("content-type") || "";
+      const playlist = /\\.m3u8?(\\?|$)/i.test(new URL(loaded.url).pathname) || /mpegurl|vnd\\.apple/i.test(type);
+      if (playlist && request.method !== "HEAD") {
+        const text = await loaded.response.text();
+        if (!text.includes("#EXTM3U")) {
+          return new Response(text, { status: loaded.response.status >= 400 ? loaded.response.status : 502, headers: { ...cors, "content-type": type || "text/plain" } });
+        }
+        const body = rewrite(text, loaded.url, relay);
+        return new Response(body, { status: 200, headers: { ...cors, "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" } });
+      }
+      const out = new Headers();
+      for (const name of ["content-type", "content-range", "accept-ranges"]) {
+        const value = loaded.response.headers.get(name);
+        if (value) out.set(name, value);
+      }
+      const path = new URL(loaded.url).pathname;
+      if (/\\.mp4(\\?|$)/i.test(path) && !(out.get("content-type") || "").startsWith("video/")) out.set("content-type", "video/mp4");
+      if (/\\.ts(\\?|$)/i.test(path) && !out.get("content-type")) out.set("content-type", "video/mp2t");
+      out.set("cache-control", "no-store");
+      out.set("access-control-allow-origin", "*");
+      out.set("access-control-expose-headers", "*");
+      return new Response(loaded.response.body, { status: loaded.response.status, headers: out });
+    } catch (error) {
+      return new Response(String(error && error.message ? error.message : error), { status: 502, headers: cors });
     }
-    const out = new Headers();
-    for (const name of ["content-type", "content-range", "accept-ranges"]) {
-      const value = upstream.headers.get(name);
-      if (value) out.set(name, value);
+  },
+};
+
+async function load(url, headers) {
+  let current = url;
+  for (let hop = 0; hop < 5; hop += 1) {
+    const target = new URL(current);
+    const response = isIp(target.hostname) ? await fetchIp(target, headers) : await fetch(target, { headers, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return { response, url: current };
+      current = new URL(location, current).toString();
+      continue;
     }
-    if (/\\.mp4(\\?|$)/i.test(parsed.pathname) && !(out.get("content-type") || "").startsWith("video/")) out.set("content-type", "video/mp4");
-    if (/\\.ts(\\?|$)/i.test(parsed.pathname) && !out.get("content-type")) out.set("content-type", "video/mp2t");
-    out.set("cache-control", "no-store");
-    out.set("access-control-allow-origin", "*");
-    out.set("access-control-expose-headers", "*");
-    return new Response(upstream.body, { status: upstream.status, headers: out });
+    return { response, url: current };
   }
-}`;
+  return { response: new Response("redirect", { status: 502 }), url: current };
+}
+
+function isIp(host) {
+  return /^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(host) || host.includes(":");
+}
+
+async function fetchIp(target, headers) {
+  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+  if (target.protocol === "https:") throw new Error("https ip");
+  const socket = connect({ hostname: target.hostname, port });
+  const path = \`\${target.pathname || "/"}\${target.search}\`;
+  const lines = [
+    \`GET \${path} HTTP/1.1\`,
+    \`Host: \${target.host}\`,
+    \`User-Agent: \${headers.get("user-agent") || "Mozilla/5.0"}\`,
+    "Accept: */*",
+    "Connection: close",
+  ];
+  const range = headers.get("range");
+  if (range) lines.push(\`Range: \${range}\`);
+  lines.push("", "");
+  const writer = socket.writable.getWriter();
+  await writer.write(new TextEncoder().encode(lines.join("\\r\\n")));
+  await writer.close();
+  return readSocket(socket.readable);
+}
+
+async function readSocket(readable) {
+  const reader = readable.getReader();
+  let buffer = new Uint8Array(0);
+  let split = -1;
+  while (split < 0) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer = append(buffer, value);
+    split = find(buffer, "\\r\\n\\r\\n");
+  }
+  const headerText = new TextDecoder().decode(buffer.slice(0, Math.max(0, split)));
+  const rest = split >= 0 ? buffer.slice(split + 4) : new Uint8Array(0);
+  const lines = headerText.split("\\r\\n");
+  const status = Number((lines[0] || "").split(" ")[1]) || 502;
+  const headers = new Headers();
+  for (const line of lines.slice(1)) {
+    const index = line.indexOf(":");
+    if (index > 0) headers.set(line.slice(0, index).trim().toLowerCase(), line.slice(index + 1).trim());
+  }
+  const length = Number(headers.get("content-length"));
+  const chunked = (headers.get("transfer-encoding") || "").includes("chunked");
+  headers.delete("transfer-encoding");
+  headers.delete("connection");
+  const body = new ReadableStream({
+    async start(controller) {
+      let pending = rest;
+      const push = (bytes) => {
+        if (bytes.length) controller.enqueue(bytes);
+      };
+      if (!chunked) {
+        let left = Number.isFinite(length) ? length : Infinity;
+        if (pending.length) {
+          const take = pending.slice(0, left);
+          push(take);
+          left -= take.length;
+          pending = pending.slice(take.length);
+        }
+        while (left > 0) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const take = value.slice(0, left);
+          push(take);
+          left -= take.length;
+        }
+        controller.close();
+        return;
+      }
+      let cache = pending;
+      const more = async () => {
+        const { value, done } = await reader.read();
+        if (done) return false;
+        cache = append(cache, value);
+        return true;
+      };
+      while (true) {
+        let nl = find(cache, "\\r\\n");
+        while (nl < 0) {
+          if (!(await more())) {
+            controller.close();
+            return;
+          }
+          nl = find(cache, "\\r\\n");
+        }
+        const size = Number.parseInt(new TextDecoder().decode(cache.slice(0, nl)).trim(), 16);
+        cache = cache.slice(nl + 2);
+        if (!Number.isFinite(size) || size === 0) {
+          controller.close();
+          return;
+        }
+        while (cache.length < size + 2) {
+          if (!(await more())) break;
+        }
+        push(cache.slice(0, size));
+        cache = cache.slice(size + 2);
+      }
+    },
+  });
+  return new Response(body, { status, headers });
+}
+
+function rewrite(text, base, relay) {
+  const abs = (value) => {
+    try {
+      return new URL(value, base).toString();
+    } catch {
+      return value;
+    }
+  };
+  return text
+    .split(/\\r?\\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) return line.replace(/URI="([^"]+)"/g, (_, uri) => \`URI="\${relay}\${encodeURIComponent(abs(uri))}"\`);
+      return relay + encodeURIComponent(abs(trimmed));
+    })
+    .join("\\n");
+}
+
+function append(left, right) {
+  const next = new Uint8Array(left.length + right.length);
+  next.set(left, 0);
+  next.set(right, left.length);
+  return next;
+}
+
+function find(buffer, text) {
+  const needle = new TextEncoder().encode(text);
+  for (let i = 0; i <= buffer.length - needle.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < needle.length; j += 1) {
+      if (buffer[i + j] !== needle[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return i;
+  }
+  return -1;
+}
+`
 
 export { WORKER };
 
