@@ -5,6 +5,7 @@ import { go } from "./hash";
 import { IconAudio, IconBack, IconBack10, IconFull, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
 import { absolutizePlaylist, directBlocked, episodeCode, formatClock } from "./media";
 import { LiveMpegAudio, prepareSegment } from "./mpeg-live";
+import { playMatroska } from "./mkv-play";
 import { saveLastLive, saveProgress, progressKey, loadPrefs } from "./storage";
 import type { PlayRequest } from "./types";
 import { proxied } from "./xtream";
@@ -17,7 +18,7 @@ const cors = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "*",
   "access-control-allow-methods": "GET,HEAD,OPTIONS",
-  "access-control-expose-headers": "*",
+  "access-control-expose-headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
 };
 
 export default {
@@ -61,7 +62,7 @@ export default {
       if (/\\.ts(\\?|$)/i.test(path) && !out.get("content-type")) out.set("content-type", "video/mp2t");
       out.set("cache-control", "no-store");
       out.set("access-control-allow-origin", "*");
-      out.set("access-control-expose-headers", "*");
+      out.set("access-control-expose-headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type");
       return new Response(loaded.response.body, { status: loaded.response.status, headers: out });
     } catch (error) {
       return new Response(String(error && error.message ? error.message : error), { status: 502, headers: cors });
@@ -266,6 +267,7 @@ export function Player(props: { request: PlayRequest }) {
   const holdChrome = useRef(false);
   const hlsRef = useRef<{ destroy: () => void; audioTrack: number; subtitleTrack: number } | null>(null);
   const soundRef = useRef<LiveMpegAudio | null>(null);
+  const mkvRef = useRef<{ stop: () => void; resume: () => void; sync: () => void } | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -349,6 +351,9 @@ export function Player(props: { request: PlayRequest }) {
       hlsRef.current = null;
       soundRef.current?.stop();
       soundRef.current = null;
+      mkvRef.current?.stop();
+      mkvRef.current = null;
+      const matroska = /\.mkv(?:$|\?|#)/i.test(raw);
       const arm = () => {
         if (mine !== token || cancelled) return;
         video.src = url;
@@ -365,6 +370,24 @@ export function Player(props: { request: PlayRequest }) {
         });
         watch();
       };
+      if (matroska) {
+        expecting = true;
+        let fell = false;
+        mkvRef.current = playMatroska(video, url, {
+          startAt: request.startAt,
+          onFail: () => {
+            if (fell || cancelled || mine !== token) return;
+            fell = true;
+            expecting = false;
+            mkvRef.current?.stop();
+            mkvRef.current = null;
+            if (native) advance();
+            else arm();
+          },
+        });
+        watch();
+        return;
+      }
       if (!isHls(raw) || (native && !software)) {
         arm();
         return;
@@ -452,13 +475,15 @@ export function Player(props: { request: PlayRequest }) {
       const mine = token;
       hlsRef.current?.destroy();
       hlsRef.current = null;
+      mkvRef.current?.stop();
+      mkvRef.current = null;
       step += 1;
       switching = false;
       void spin(mine);
     };
 
     const onMediaError = () => {
-      if (!expecting || cancelled) return;
+      if (!expecting || cancelled || mkvRef.current) return;
       advance();
     };
 
@@ -469,6 +494,7 @@ export function Player(props: { request: PlayRequest }) {
     const onTime = () => {
       if (video.currentTime > 0.3) stopWatch();
       soundRef.current?.sync();
+      mkvRef.current?.sync();
       setPosition(video.currentTime || 0);
       setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       if (video.currentTime > 0 && Math.floor(video.currentTime) % 5 === 0) remember();
@@ -508,6 +534,8 @@ export function Player(props: { request: PlayRequest }) {
       stopWatch();
       soundRef.current?.stop();
       soundRef.current = null;
+      mkvRef.current?.stop();
+      mkvRef.current = null;
       remember();
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("timeupdate", onTime);
@@ -528,6 +556,10 @@ export function Player(props: { request: PlayRequest }) {
   const seek = (delta: number) => {
     const video = videoRef.current;
     if (!video) return;
+    if (mkvRef.current && Number.isFinite(video.duration)) {
+      video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + delta));
+      return;
+    }
     const start = video.seekable.length ? video.seekable.start(0) : 0;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : video.duration;
     const cap = Number.isFinite(end) ? end : video.currentTime + Math.max(0, delta);
@@ -538,6 +570,7 @@ export function Player(props: { request: PlayRequest }) {
     const video = videoRef.current;
     if (!video) return;
     soundRef.current?.resume();
+    mkvRef.current?.resume();
     if (video.paused) void video.play();
     else video.pause();
   };
@@ -565,6 +598,7 @@ export function Player(props: { request: PlayRequest }) {
   holdChrome.current = menu !== "" || failed || ended;
   const nudge = () => {
     soundRef.current?.resume();
+    mkvRef.current?.resume();
     window.clearTimeout(chromeTimer.current);
     if (!chromeShown.current) {
       chromeShown.current = true;
