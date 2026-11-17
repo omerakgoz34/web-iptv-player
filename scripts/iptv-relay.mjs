@@ -64,20 +64,16 @@ export async function relayRequest(request) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return new Response("blocked", { status: 400 });
   if (isBlockedHost(parsed.hostname)) return new Response("blocked", { status: 400 });
   const headers = new Headers();
+  const pathList = /\.m3u8?(\?|$)/i.test(parsed.pathname);
   const range = request.headers.get("range");
-  if (range) headers.set("range", range);
-  const media = /\.(m3u8?|mp4|m4v|mkv|avi|ts|mov|webm)(\?|$)/i.test(parsed.pathname);
-  if (media) {
-    headers.set("user-agent", "VLC/3.0.21 LibVLC/3.0.21");
-    headers.set("referer", `${parsed.origin}/`);
-  } else {
-    const ua = request.headers.get("user-agent");
-    if (ua) headers.set("user-agent", ua);
-  }
+  if (range && !pathList) headers.set("range", range);
+  const ua = request.headers.get("user-agent");
+  if (ua) headers.set("user-agent", ua);
   headers.set("accept", request.headers.get("accept") || "*/*");
+  headers.set("referer", `${parsed.origin}/`);
   const upstream = await fetch(parsed, { method: request.method, headers, redirect: "follow" });
   const type = upstream.headers.get("content-type") || "";
-  const playlist = /\.m3u8?(\?|$)/i.test(parsed.pathname) || /mpegurl|vnd\.apple/i.test(type);
+  const playlist = pathList || /mpegurl|vnd\.apple/i.test(type);
   if (playlist && request.method !== "HEAD") {
     const text = await upstream.text();
     if (!text.includes("#EXTM3U")) {
@@ -89,7 +85,7 @@ export async function relayRequest(request) {
     const relayBase = `${url.origin}${url.pathname}?url=`;
     const body = rewritePlaylist(text, upstream.url || parsed.toString(), relayBase);
     return new Response(body, {
-      status: upstream.status,
+      status: 200,
       headers: {
         "content-type": "application/vnd.apple.mpegurl",
         "cache-control": "no-store",
@@ -98,13 +94,14 @@ export async function relayRequest(request) {
     });
   }
   const out = new Headers();
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+  for (const name of ["content-type", "content-range", "accept-ranges"]) {
     const value = upstream.headers.get(name);
     if (value) out.set(name, value);
   }
   if (/\.mp4(\?|$)/i.test(parsed.pathname) && !out.get("content-type")?.startsWith("video/")) {
     out.set("content-type", "video/mp4");
   }
+  if (/\.ts(\?|$)/i.test(parsed.pathname) && !out.get("content-type")) out.set("content-type", "video/mp2t");
   out.set("cache-control", "no-store");
   out.set("access-control-allow-origin", "*");
   return new Response(request.method === "HEAD" ? null : upstream.body, { status: upstream.status, headers: out });

@@ -2,9 +2,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useApp } from "./context";
 import { go } from "./hash";
-import { IconAudio, IconBack, IconBack10, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
+import { IconAudio, IconBack, IconBack10, IconFull, IconFwd10, IconPause, IconPlay, IconSubs } from "./icons";
 import { absolutizePlaylist, directBlocked, episodeCode, formatClock } from "./media";
-import { saveLastLive, saveProgress, progressKey } from "./storage";
+import { saveLastLive, saveProgress, progressKey, loadPrefs } from "./storage";
 import type { PlayRequest } from "./types";
 import { proxied } from "./xtream";
 
@@ -15,31 +15,30 @@ const WORKER = `export default {
     const cors = {
       "access-control-allow-origin": "*",
       "access-control-allow-headers": "*",
-      "access-control-allow-methods": "GET,HEAD,OPTIONS"
+      "access-control-allow-methods": "GET,HEAD,OPTIONS",
+      "access-control-expose-headers": "*"
     };
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const here = new URL(request.url);
     const target = here.searchParams.get("url");
-    if (!target) return new Response("missing", { status: 400 });
-    const parsed = new URL(target);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return new Response("blocked", { status: 400 });
+    if (!target) return new Response("missing", { status: 400, headers: cors });
+    let parsed;
+    try { parsed = new URL(target); }
+    catch { return new Response("bad", { status: 400, headers: cors }); }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return new Response("blocked", { status: 400, headers: cors });
+    const pathList = /\\.m3u8?(\\?|$)/i.test(parsed.pathname);
     const headers = new Headers();
     const range = request.headers.get("range");
-    if (range) headers.set("range", range);
-    const media = /\\.(m3u8?|mp4|m4v|mkv|avi|ts|mov|webm)(\\?|$)/i.test(parsed.pathname);
-    if (media) {
-      headers.set("user-agent", "VLC/3.0.21 LibVLC/3.0.21");
-      headers.set("referer", parsed.origin + "/");
-    } else {
-      const ua = request.headers.get("user-agent");
-      if (ua) headers.set("user-agent", ua);
-    }
+    if (range && !pathList) headers.set("range", range);
+    headers.set("user-agent", request.headers.get("user-agent") || "Mozilla/5.0");
+    headers.set("accept", "*/*");
+    headers.set("referer", parsed.origin + "/");
     const upstream = await fetch(parsed, { headers, redirect: "follow" });
     const type = upstream.headers.get("content-type") || "";
     const relay = here.origin + here.pathname + "?url=";
-    if (/\\.m3u8?(\\?|$)/i.test(parsed.pathname) || /mpegurl/i.test(type)) {
+    if ((pathList || /mpegurl|vnd\\.apple/i.test(type)) && request.method !== "HEAD") {
       const text = await upstream.text();
-      if (!text.includes("#EXTM3U")) return new Response(text, { status: upstream.status >= 400 ? upstream.status : 502, headers: cors });
+      if (!text.includes("#EXTM3U")) return new Response(text, { status: upstream.status >= 400 ? upstream.status : 502, headers: { ...cors, "content-type": type || "text/plain" } });
       const abs = (u) => { try { return new URL(u, upstream.url).toString(); } catch { return u; } };
       const body = text.split(/\\r?\\n/).map((line) => {
         const t = line.trim();
@@ -47,10 +46,18 @@ const WORKER = `export default {
         if (t.startsWith("#")) return line.replace(/URI="([^"]+)"/g, (_, u) => 'URI="' + relay + encodeURIComponent(abs(u)) + '"');
         return relay + encodeURIComponent(abs(t));
       }).join("\\n");
-      return new Response(body, { status: upstream.status, headers: { ...cors, "content-type": "application/vnd.apple.mpegurl" } });
+      return new Response(body, { status: 200, headers: { ...cors, "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" } });
     }
-    const out = new Headers(upstream.headers);
+    const out = new Headers();
+    for (const name of ["content-type", "content-range", "accept-ranges"]) {
+      const value = upstream.headers.get(name);
+      if (value) out.set(name, value);
+    }
+    if (/\\.mp4(\\?|$)/i.test(parsed.pathname) && !(out.get("content-type") || "").startsWith("video/")) out.set("content-type", "video/mp4");
+    if (/\\.ts(\\?|$)/i.test(parsed.pathname) && !out.get("content-type")) out.set("content-type", "video/mp2t");
+    out.set("cache-control", "no-store");
     out.set("access-control-allow-origin", "*");
+    out.set("access-control-expose-headers", "*");
     return new Response(upstream.body, { status: upstream.status, headers: out });
   }
 }`;
@@ -60,6 +67,8 @@ export { WORKER };
 export function Player(props: { request: PlayRequest }) {
   const app = useApp();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(props.request.startAt || 0);
   const [duration, setDuration] = useState(0);
@@ -346,6 +355,26 @@ export function Player(props: { request: PlayRequest }) {
     else video.pause();
   };
 
+  useEffect(() => {
+    const sync = () => setFull(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  const toggleFull = () => {
+    const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    const stage = stageRef.current;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    if (stage?.requestFullscreen) {
+      void stage.requestFullscreen().catch(() => video?.webkitEnterFullscreen?.());
+      return;
+    }
+    video?.webkitEnterFullscreen?.();
+  };
+
   holdChrome.current = menu !== "" || failed || ended;
   const nudge = () => {
     window.clearTimeout(chromeTimer.current);
@@ -412,6 +441,7 @@ export function Player(props: { request: PlayRequest }) {
 
   return (
     <div
+      ref={stageRef}
       data-player
       data-screen
       class="fixed inset-0 z-30 box-border flex bg-black pt-[env(safe-area-inset-top,0px)] pr-[env(safe-area-inset-right,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)]"
@@ -485,6 +515,9 @@ export function Player(props: { request: PlayRequest }) {
             <button type="button" data-nav class={`${control} ${menu === "sub" ? "bg-accent text-on-accent" : "border border-white/25 bg-black/40 text-white"}`} aria-label={app.t("subtitles")} aria-pressed={menu === "sub"} onClick={() => setMenu(menu === "sub" ? "" : "sub")}>
               <IconSubs />
             </button>
+            <button type="button" data-nav class={`${control} border border-white/25 bg-black/40 text-white`} aria-label={app.t("fullscreen")} aria-pressed={full} onClick={toggleFull}>
+              <IconFull on={full} />
+            </button>
           </div>
         </div>
         {menu ? (
@@ -532,7 +565,8 @@ function attemptsFor(request: PlayRequest, ios: boolean): Array<{ raw: string; r
   }
   const attempts: Array<{ raw: string; relay: boolean }> = [];
   for (const raw of urls) {
-    const relays = ios && request.kind !== "live" ? [true, false] : [false, true];
+    const preferRelay = Boolean(loadPrefs().relay.trim()) || loadPrefs().forceRelay;
+    const relays = preferRelay || (ios && request.kind !== "live") ? [true, false] : [false, true];
     for (const relay of relays) {
       if (!relay && directBlocked(raw)) continue;
       attempts.push({ raw, relay });
